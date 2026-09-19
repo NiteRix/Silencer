@@ -95,6 +95,26 @@ await page.waitForTimeout(600);
 await page.screenshot({ path: path.join(OUT, '2-analyzed.png') });
 console.log('2-analyzed.png  ->', await page.textContent('#status'));
 
+// The working state, with a way out of it.
+await page.evaluate(() => {
+  document.getElementById('results').classList.add('hidden');
+  document.getElementById('empty-hint').classList.add('hidden');
+  document.getElementById('progress').classList.remove('hidden');
+  document.getElementById('progress-bar').style.width = '38%';
+  document.getElementById('progress-text').textContent = 'Reading A004_C012_LONG.mov  38%';
+  document.getElementById('status').textContent = 'Analyzing\u2026';
+  ['analyze','cut','markers','refresh'].forEach(id => { document.getElementById(id).disabled = true; });
+});
+await page.waitForTimeout(250);
+await page.screenshot({ path: path.join(OUT, '5-working.png') });
+console.log('5-working.png');
+
+await page.reload();
+await page.waitForFunction(() => !document.getElementById('analyze').disabled, null, { timeout: 15000 });
+await page.click('#analyze');
+await page.waitForFunction(() => !document.getElementById('results').classList.contains('hidden'), null, { timeout: 60000 });
+await page.waitForTimeout(400);
+
 // Settings open.
 await page.evaluate(() => {
   document.getElementById('settings-card').open = true;

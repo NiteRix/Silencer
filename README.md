@@ -123,19 +123,30 @@ half-applied, and the panel tells you how many were skipped.
 
 ### ffmpeg
 
-Silencer decodes audio using Chromium, which is built into the panel and covers
-the common cases: MP4/H.264 with AAC, M4A, MP3, WAV, FLAC, OGG.
+Silencer ships with its own ffmpeg on Windows, so there is nothing to install
+and nothing is downloaded at install time.
 
-It does not cover ProRes, DNxHD, most `.mov` variants, or anything else
-Chromium never learned. If ffmpeg is available Silencer uses it instead, which
-handles everything Premiere can open and streams long files without loading
-them into memory.
+It is not a stock build. Silencer issues exactly one ffmpeg command — open a
+file, decode one audio stream, resample to mono 8 kHz, write raw floats — so
+the bundled build is configured with `--disable-everything` plus only the audio
+demuxers, audio decoders and the raw-PCM muxer that command needs, and with
+libavutil's double and fixed-point transforms removed (12.5 MB of FFT code that
+none of the enabled decoders reach). Upstream's `ffmpeg.exe` is 127 MB; this
+one is about 7 MB and decodes the same files.
 
-The installer offers to fetch ffmpeg for you. Otherwise, Silencer looks for it
-in this order:
+It is LGPL v2.1. The licence, the full configure line and the single source
+change travel with the binary in `extension/bin/`, and the recipe is
+[`scripts/build-ffmpeg.sh`](scripts/build-ffmpeg.sh).
 
-1. `<extension folder>/bin/ffmpeg` (where the installer puts it)
-2. a path you set yourself: `localStorage.setItem('silencer.ffmpegPath', '/path/to/ffmpeg')`
+Without ffmpeg the panel falls back to decoding in Chromium, which handles
+MP4/H.264 with AAC, M4A, MP3, WAV, FLAC and OGG, but not ProRes, DNxHD, most
+`.mov` variants, or files too large to hold in memory.
+
+On macOS there is no bundled binary yet — `brew install ffmpeg` and Silencer
+will find it. It looks, in order:
+
+1. `<extension folder>/bin/ffmpeg` (where the release puts it)
+2. a path you set: `localStorage.setItem('silencer.ffmpegPath', '/path/to/ffmpeg')`
 3. your `PATH`
 4. the usual suspects — `/opt/homebrew/bin`, `/usr/local/bin`, `C:\ffmpeg\bin`
 
@@ -149,7 +160,7 @@ The panel's **Details** section tells you which decoder it ended up using.
   13.x (2019) can analyse and place markers, but it lacks the scripting call
   that moves clips.
 - Windows 10+ or macOS 10.14+.
-- ffmpeg is optional.
+- ffmpeg is bundled on Windows; optional elsewhere.
 
 ## Limitations
 

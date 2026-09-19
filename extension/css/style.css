@@ -230,7 +230,21 @@ label.check input { margin: 0; flex: 0 0 auto; accent-color: var(--accent); }
 .progress { margin-bottom: 10px; }
 .progress-track { height: 3px; background: var(--border); border-radius: 2px; overflow: hidden; }
 .progress-bar { height: 100%; width: 0; background: var(--accent); transition: width 0.15s ease; }
-.progress-text { color: var(--text-dim); margin-top: 5px; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.progress-row { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+.progress-text { flex: 1; color: var(--text-dim); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.btn-cancel {
+  flex: 0 0 auto;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+  border-radius: var(--radius);
+  padding: 2px 9px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+.btn-cancel:hover { color: var(--danger); border-color: var(--danger); }
 
 /* -------------------------------------------------------------- results */
 

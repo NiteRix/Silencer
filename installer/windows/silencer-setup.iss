@@ -38,15 +38,8 @@ AppUpdatesURL=https://github.com/NiteRix/Silencer/releases
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
-[Tasks]
-Name: "ffmpeg"; \
-  Description: "Add ffmpeg (about 30 MB, downloaded now) for ProRes, DNxHD and other pro codecs"; \
-  GroupDescription: "Optional:"; \
-  Flags: unchecked
-
 [Files]
 Source: "{#SourceRoot}\extension\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#SourceRoot}\Install-Windows.bat"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SourceRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
 
 [Registry]
@@ -59,11 +52,6 @@ Root: HKCU; Subkey: "Software\Adobe\CSXS.9";  ValueType: string; ValueName: "Pla
 Root: HKCU; Subkey: "Software\Adobe\CSXS.10"; ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Adobe\CSXS.11"; ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
 Root: HKCU; Subkey: "Software\Adobe\CSXS.12"; ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
-
-[Run]
-; Batch files have to go through cmd.exe; Inno escapes a quote by doubling it.
-Filename: "{cmd}"; Parameters: "/c ""{app}\Install-Windows.bat"" /ffmpegonly /silent"; \
-  StatusMsg: "Downloading ffmpeg..."; Tasks: ffmpeg; Flags: runhidden waituntilterminated
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}\bin"

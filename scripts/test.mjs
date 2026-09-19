@@ -86,7 +86,7 @@ function makeSignal(durationSec, spans) {
   return samples;
 }
 
-function loadAnalyzer(samples) {
+function loadAnalyzer(samples, spy) {
   const sandbox = {
     Promise, Math, Number, String, Array, Float32Array, Uint8Array, Object,
     isFinite, isNaN, parseFloat, console, setTimeout,
@@ -95,7 +95,17 @@ function loadAnalyzer(samples) {
       hasNode: () => true,
       fileSize: () => 1000,
       findFfmpeg: () => '/fake/ffmpeg',
-      decodeWithFfmpeg: () => Promise.resolve(samples),
+      // Honour -ss/-t the way ffmpeg does, so the analyzer's source-offset
+      // bookkeeping is actually under test rather than papered over.
+      decodeWithFfmpeg: (ffmpeg, path, rate, opts) => {
+        opts = opts || {};
+        if (spy) { spy.push({ path, start: opts.start || 0, duration: opts.duration || 0 }); }
+        const from = Math.max(0, Math.round((opts.start || 0) * RATE));
+        const len = opts.duration > 0
+          ? Math.round(opts.duration * RATE)
+          : samples.length - from;
+        return Promise.resolve(samples.slice(from, Math.min(samples.length, from + len)));
+      },
       readArrayBuffer: () => { throw new Error('should not be reached'); }
     }
   };
@@ -196,6 +206,50 @@ await testAsync('clip in/out and speed are mapped into sequence time', async () 
   near(res.regions[0][1], 1.9, 0.08, 'head silence end');
   near(res.regions[1][0], 6.1, 0.08, 'tail silence start');
   near(res.regions[1][1], 8, 0.05, 'tail silence end');
+});
+
+await testAsync('only the slice of the file the timeline uses gets decoded', async () => {
+  // A 10 s source with a clip using source 6-10 s must not decode 0-6 s.
+  const samples = makeSignal(10, [[0, 4, 0.3], [6, 10, 0.3]]);
+  const spy = [];
+  const A = loadAnalyzer(samples, spy);
+  const info = sequence(8);
+  info.audioTracks[0].clips[0] = {
+    ...info.audioTracks[0].clips[0], start: 2, end: 6, inPoint: 6, outPoint: 10, speed: 1
+  };
+  await A.analyze(info, BASE, null);
+
+  assert.equal(spy.length, 1, 'the file should be decoded once');
+  near(spy[0].start, 5.5, 0.01, 'decode start (6 s minus half a second of slack)');
+  near(spy[0].duration, 5.0, 0.01, 'decode duration (4 s used plus slack both ends)');
+});
+
+await testAsync('two clips off one file widen the decode to cover both', async () => {
+  const samples = makeSignal(30, [[0, 30, 0.3]]);
+  const spy = [];
+  const A = loadAnalyzer(samples, spy);
+  const info = sequence(20);
+  const base = info.audioTracks[0].clips[0];
+  info.audioTracks[0].clips = [
+    { ...base, start: 0, end: 5, inPoint: 2, outPoint: 7, speed: 1 },
+    { ...base, start: 5, end: 10, inPoint: 20, outPoint: 25, speed: 1 }
+  ];
+  await A.analyze(info, BASE, null);
+
+  assert.equal(spy.length, 1, 'one decode covering both clips, not two');
+  near(spy[0].start, 1.5, 0.01, 'starts before the earlier clip');
+  near(spy[0].start + spy[0].duration, 25.5, 0.01, 'ends after the later clip');
+});
+
+await testAsync('cancelling stops the analysis', async () => {
+  const samples = makeSignal(12, [[2, 5, 0.3]]);
+  const A = loadAnalyzer(samples);
+  let err = null;
+  try {
+    await A.analyze(sequence(12), { ...BASE, isCancelled: () => true }, null);
+  } catch (e) { err = e; }
+  assert.ok(err, 'analyze should reject when cancelled');
+  assert.match(err.message, /cancel/i);
 });
 
 await testAsync('every region is snapped to whole frames', async () => {

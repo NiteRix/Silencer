@@ -34,16 +34,48 @@ jobs:
           bash -n Install-Mac.command
           bash -n Uninstall-Mac.command
 
-  zip:
-    name: Portable zip
+  ffmpeg:
+    name: Minimal ffmpeg (win64)
     runs-on: ubuntu-latest
     needs: check
     steps:
       - uses: actions/checkout@v4
+      - name: Cache the built binary
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-out
+          # Rebuilding takes minutes, and only changes when the recipe or the
+          # pinned ffmpeg tag does.
+          key: ffmpeg-win64-${{ hashFiles('scripts/build-ffmpeg.sh') }}
+      - name: Install toolchain
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq mingw-w64 nasm
+      - name: Build
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: scripts/build-ffmpeg.sh windows ffmpeg-out/ffmpeg.exe
+      - name: Report size
+        run: ls -l ffmpeg-out/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: ffmpeg-out/
+
+  zip:
+    name: Portable zip
+    runs-on: ubuntu-latest
+    needs: [check, ffmpeg]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: extension/bin
       - name: Stage payload
         run: |
           VERSION="$(grep -oP 'ExtensionBundleVersion="\K[^"]+' extension/CSXS/manifest.xml)"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          chmod +x extension/bin/ffmpeg.exe 2>/dev/null || true
           mkdir -p "stage/Silencer-$VERSION"
           cp -R extension "stage/Silencer-$VERSION/"
           cp Install-Windows.bat Uninstall-Windows.bat \
@@ -62,9 +94,19 @@ jobs:
   windows-setup:
     name: Windows .exe
     runs-on: windows-latest
-    needs: check
+    needs: [check, ffmpeg]
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-win64
+          path: extension/bin
+      - name: Confirm ffmpeg is in the payload
+        shell: pwsh
+        run: |
+          $ff = "extension/bin/ffmpeg.exe"
+          if (-not (Test-Path $ff)) { Write-Error "ffmpeg.exe missing - the installer would ship without it"; exit 1 }
+          "{0:N1} MB  {1}" -f ((Get-Item $ff).Length / 1MB), $ff
       - name: Read version from manifest
         shell: pwsh
         run: |
@@ -117,6 +159,13 @@ jobs:
           path: artifacts
       - name: Show what will be attached
         run: find artifacts -type f -printf '%s\t%p\n' | sort -rn
+      - name: Checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name '*.exe' -o -name '*.zip' \) -printf '%p\n' \
+            | sort | xargs sha256sum | sed 's|\./[^/]*/||' > ../SHA256SUMS.txt
+          cat ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
       - name: Resolve tag
         # On a tag push the ref is the tag; on a manual run it comes from the
         # input, and action-gh-release creates the tag at this commit. Assets
@@ -142,6 +191,7 @@ jobs:
           files: |
             artifacts/**/*.zip
             artifacts/**/*.exe
+            artifacts/SHA256SUMS.txt
           body: |
             Removes the silence from a Premiere Pro timeline, after duplicating
             the sequence into a backup bin.
@@ -171,6 +221,8 @@ jobs:
               ProRes, DNxHD and other codecs the built-in decoder cannot read.
             - Nothing leaves your machine, and nothing is cut until you press
               **Cut the silence**.
+
+            Verify a download against `SHA256SUMS.txt` if you want to.
 
             Full README: https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/README.md
             Trouble: https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/docs/TROUBLESHOOTING.md

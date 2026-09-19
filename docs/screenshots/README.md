@@ -21,6 +21,10 @@ CHROMIUM_PATH=/path/to/chrome node scripts/make-screenshots.mjs /tmp/fixture.wav
 | `2-analyzed.png` | After **Analyze silence** |
 | `3-settings.png` | Detection settings, manual threshold |
 | `4-after-cut.png` | After **Cut the silence**, with the log open |
+| `5-working.png` | Mid-analysis, showing per-file progress and Cancel |
 
 The stub runs outside CEP, so Node.js is absent and the log says so. Inside
 Premiere that line is replaced by whether ffmpeg was found.
+
+`5-working.png` has its progress state set directly, because a cached decode
+finishes too fast to catch. Every other shot is live output.

@@ -28,6 +28,7 @@
   var sequenceInfo = null;
   var result = null;
   var busy = false;
+  var cancelRequested = false;
   var extensionRoot = '';
   var reanalyzeTimer = null;
 
@@ -194,6 +195,7 @@
 
   function runAnalysis(quiet) {
     if (busy) { return Promise.resolve(); }
+    cancelRequested = false;
     setBusy(true);
     if (!quiet) { status('Analyzing…'); }
 
@@ -202,6 +204,7 @@
       var opts = {};
       Object.keys(settings).forEach(function (k) { opts[k] = settings[k]; });
       opts.extensionRoot = extensionRoot;
+      opts.isCancelled = function () { return cancelRequested; };
       return global.Analyzer.analyze(info, opts, progress);
     }).then(function (res) {
       hideProgress();
@@ -214,8 +217,13 @@
     }).catch(function (err) {
       hideProgress();
       invalidateResult();
-      status(err.message || String(err), 'error');
+      if (cancelRequested || /cancel/i.test(err.message || '')) {
+        status('Stopped. Nothing was changed.');
+      } else {
+        status(err.message || String(err), 'error');
+      }
     }).then(function () {
+      cancelRequested = false;
       setBusy(false);
     });
   }
@@ -293,6 +301,13 @@
     });
 
     $('analyze').addEventListener('click', function () { runAnalysis(false); });
+
+    $('cancel').addEventListener('click', function () {
+      // Kill any ffmpeg still running, then let the chain unwind on its own.
+      cancelRequested = true;
+      try { global.Env.killAll(); } catch (e) {}
+      $('progress-text').textContent = 'Stopping\u2026';
+    });
     $('cut').addEventListener('click', applyCuts);
     $('markers').addEventListener('click', applyMarkers);
 

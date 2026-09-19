@@ -178,7 +178,7 @@ $.silencer = (function () {
             build: (app.build ? String(app.build) : ''),
             hasSequence: !!seq,
             sequenceName: seq ? String(seq.name) : '',
-            scriptVersion: '1.0.0'
+            scriptVersion: '1.0.1'
         });
     }
 

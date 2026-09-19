@@ -100,33 +100,117 @@
     cachedFfmpeg = undefined;
   }
 
+  /** Children currently running, so a cancel can actually stop them. */
+  var liveChildren = [];
+
+  function killAll() {
+    var i;
+    for (i = 0; i < liveChildren.length; i++) {
+      try { liveChildren[i].kill(); } catch (e) {}
+    }
+    liveChildren = [];
+  }
+
+  function forget(child) {
+    var i = liveChildren.indexOf(child);
+    if (i >= 0) { liveChildren.splice(i, 1); }
+  }
+
   /**
    * Decodes one audio stream to mono float samples at `rate` Hz.
-   * Output goes through a temp file rather than a pipe so that hour-long
-   * timelines do not run into stdout buffer limits.
+   *
+   * opts.start / opts.duration limit the decode to the slice of the file the
+   * timeline actually uses - on a multi-gigabyte source that is the difference
+   * between seconds and many minutes.
+   *
+   * Output goes to a temp file rather than a pipe so hour-long takes cannot hit
+   * stdout buffer limits, which leaves stdout free for -progress. Without that
+   * the panel had no idea how far along a decode was, and a slow file was
+   * indistinguishable from a hang.
    */
-  function decodeWithFfmpeg(ffmpeg, mediaPath, rate) {
+  function decodeWithFfmpeg(ffmpeg, mediaPath, rate, opts) {
+    opts = opts || {};
+    var stallMs = (opts.stallSeconds || 90) * 1000;
+
     return new Promise(function (resolve, reject) {
       var out = tempFile('.f32');
-      var args = [
-        '-hide_banner', '-nostdin', '-v', 'error',
-        '-i', mediaPath,
+      var args = ['-hide_banner', '-nostdin', '-v', 'error'];
+
+      // Seeking before -i is the fast path: ffmpeg skips to the keyframe
+      // rather than decoding everything up to it.
+      if (opts.start > 0) { args.push('-ss', String(opts.start)); }
+      args.push('-i', mediaPath);
+      if (opts.duration > 0) { args.push('-t', String(opts.duration)); }
+
+      args = args.concat([
         '-vn', '-sn', '-dn',
         '-map', '0:a:0',
         '-ac', '1',
         '-ar', String(rate),
         '-f', 'f32le',
+        '-nostats',
+        '-progress', 'pipe:1',
         '-y', out
-      ];
+      ]);
+
       var stderr = '';
+      var settled = false;
+      var stallTimer = null;
       var child;
+
+      function cleanup() {
+        if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+        if (child) { forget(child); }
+      }
+
+      function fail(err) {
+        if (settled) { return; }
+        settled = true;
+        cleanup();
+        remove(out);
+        reject(err);
+      }
+
+      function touch() {
+        if (stallTimer) { clearTimeout(stallTimer); }
+        stallTimer = setTimeout(function () {
+          try { if (child) { child.kill(); } } catch (e) {}
+          fail(new Error('ffmpeg stopped responding after ' + (stallMs / 1000) +
+                         's with no progress. The file may be on a disconnected drive.'));
+        }, stallMs);
+      }
+
       try {
         child = cp.spawn(ffmpeg, args, { windowsHide: true });
-      } catch (e) { reject(e); return; }
+      } catch (e) { remove(out); reject(e); return; }
 
-      child.stderr.on('data', function (d) { stderr += String(d); });
-      child.on('error', function (e) { remove(out); reject(e); });
+      liveChildren.push(child);
+      touch();
+
+      var pending = '';
+      child.stdout.on('data', function (chunk) {
+        touch();
+        if (!opts.onProgress || !(opts.duration > 0)) { return; }
+        pending += String(chunk);
+        var lines = pending.split(/\r?\n/);
+        pending = lines.pop();
+        var i, m;
+        for (i = 0; i < lines.length; i++) {
+          // out_time_us is microseconds; out_time_ms is too, despite the name.
+          m = lines[i].match(/^out_time_(?:us|ms)=(\d+)/);
+          if (m) {
+            opts.onProgress(Math.min(1, (Number(m[1]) / 1e6) / opts.duration));
+          }
+        }
+      });
+
+      child.stderr.on('data', function (d) { touch(); stderr += String(d); });
+      child.on('error', function (e) { fail(e); });
+
       child.on('close', function (code) {
+        if (settled) { return; }
+        settled = true;
+        cleanup();
         if (code !== 0) {
           remove(out);
           reject(new Error('ffmpeg failed (' + code + '): ' + stderr.slice(0, 300)));
@@ -135,8 +219,7 @@
         try {
           var buf = fs.readFileSync(out);
           remove(out);
-          var samples = new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-          resolve(samples);
+          resolve(new Float32Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)));
         } catch (e2) { remove(out); reject(e2); }
       });
     });
@@ -150,6 +233,7 @@
     readArrayBuffer: readArrayBuffer,
     findFfmpeg: findFfmpeg,
     setFfmpegPath: setFfmpegPath,
-    decodeWithFfmpeg: decodeWithFfmpeg
+    decodeWithFfmpeg: decodeWithFfmpeg,
+    killAll: killAll
   };
 }(window));

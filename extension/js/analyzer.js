@@ -85,22 +85,52 @@
     return db;
   }
 
-  function getEnvelope(mediaPath, ffmpegPath) {
-    if (envelopeCache[mediaPath]) { return Promise.resolve(envelopeCache[mediaPath]); }
+  /**
+   * range = { start, duration } in source seconds, or null for the whole file.
+   * Resolves to { db, offset } where offset is the source time db[0] represents.
+   */
+  function getEnvelope(mediaPath, ffmpegPath, range, onProgress) {
+    var cached = envelopeCache[mediaPath];
+    if (cached && covers(cached, range)) { return Promise.resolve(cached); }
 
-    var decode = ffmpegPath
-      ? global.Env.decodeWithFfmpeg(ffmpegPath, mediaPath, RATE)
-          .catch(function (err) {
-            // A stream ffmpeg cannot map is worth one more try through Chromium.
-            return decodeWithChromium(mediaPath).catch(function () { throw err; });
-          })
-      : decodeWithChromium(mediaPath);
+    var decode;
+    if (ffmpegPath) {
+      decode = global.Env.decodeWithFfmpeg(ffmpegPath, mediaPath, RATE, {
+        start: range ? range.start : 0,
+        duration: range ? range.duration : 0,
+        onProgress: onProgress
+      }).then(function (samples) {
+        return { samples: samples, offset: range ? range.start : 0 };
+      }).catch(function (err) {
+        if (/cancelled/i.test(err.message || '')) { throw err; }
+        // A stream ffmpeg cannot map is worth one more try through Chromium,
+        // which always reads from the top of the file.
+        return decodeWithChromium(mediaPath)
+          .then(function (samples) { return { samples: samples, offset: 0 }; })
+          .catch(function () { throw err; });
+      });
+    } else {
+      decode = decodeWithChromium(mediaPath).then(function (samples) {
+        return { samples: samples, offset: 0 };
+      });
+    }
 
-    return decode.then(function (samples) {
-      var env = samplesToEnvelope(samples);
+    return decode.then(function (result) {
+      var env = {
+        db: samplesToEnvelope(result.samples),
+        offset: result.offset,
+        duration: range && result.offset > 0 ? range.duration : Infinity
+      };
       envelopeCache[mediaPath] = env;
       return env;
     });
+  }
+
+  /** True when a cached envelope already spans everything `range` needs. */
+  function covers(env, range) {
+    if (!range) { return env.offset <= 0 && env.duration === Infinity; }
+    if (env.offset > range.start + 1e-6) { return false; }
+    return (env.offset + env.duration) >= (range.start + range.duration) - 1e-6;
   }
 
   function clearCache() { envelopeCache = {}; }
@@ -175,21 +205,48 @@
       return Promise.reject(new Error('No usable audio clips were found on the selected tracks.'));
     }
 
+    // Only the slice of each file the timeline actually touches needs decoding.
+    // A four-hour rush with ninety seconds on the timeline should cost ninety
+    // seconds of work, not four hours.
     var uniquePaths = [];
-    var seen = {};
+    var ranges = {};
     for (i = 0; i < jobs.length; i++) {
-      if (!seen[jobs[i].mediaPath]) { seen[jobs[i].mediaPath] = true; uniquePaths.push(jobs[i].mediaPath); }
+      var job = jobs[i];
+      var from = job.inPoint;
+      var to = job.inPoint + (job.end - job.start) * job.speed;
+      if (!ranges[job.mediaPath]) {
+        uniquePaths.push(job.mediaPath);
+        ranges[job.mediaPath] = { start: from, end: to };
+      } else {
+        if (from < ranges[job.mediaPath].start) { ranges[job.mediaPath].start = from; }
+        if (to > ranges[job.mediaPath].end) { ranges[job.mediaPath].end = to; }
+      }
+    }
+    for (i = 0; i < uniquePaths.length; i++) {
+      var r = ranges[uniquePaths[i]];
+      r.start = Math.max(0, r.start - 0.5);          // a little slack either side
+      r.duration = Math.max(0.5, (r.end + 0.5) - r.start);
     }
 
     var failures = [];
     var chain = Promise.resolve();
+    var cancelled = function () { return settings.isCancelled && settings.isCancelled(); };
 
     uniquePaths.forEach(function (p, idx) {
       chain = chain.then(function () {
-        if (onProgress) {
-          onProgress(idx / uniquePaths.length, 'Reading ' + p.replace(/^.*[\\\/]/, ''));
-        }
-        return getEnvelope(p, ffmpegPath).catch(function (err) {
+        if (cancelled()) { throw new Error('Cancelled.'); }
+        var label = p.replace(/^.*[\\\/]/, '');
+        var base = idx / uniquePaths.length;
+        var slice = 0.85 / uniquePaths.length;
+        if (onProgress) { onProgress(base, 'Reading ' + label); }
+
+        return getEnvelope(p, ffmpegPath, ranges[p], function (fraction) {
+          if (onProgress) {
+            onProgress(base + slice * fraction,
+                       'Reading ' + label + '  ' + Math.round(fraction * 100) + '%');
+          }
+        }).catch(function (err) {
+          if (cancelled()) { throw new Error('Cancelled.'); }
           failures.push({ path: p, error: err.message || String(err) });
           return null;
         });
@@ -197,6 +254,7 @@
     });
 
     return chain.then(function () {
+      if (cancelled()) { throw new Error('Cancelled.'); }
       if (onProgress) { onProgress(0.9, 'Measuring the timeline'); }
 
       // Paint every clip's envelope into sequence time.
@@ -213,9 +271,9 @@
           tlT = h * HOP;
           if (tlT < clipRec.start - HOP || tlT > clipRec.end + HOP) { continue; }
           srcT = clipRec.inPoint + (tlT - clipRec.start) * clipRec.speed;
-          srcHop = Math.round(srcT / HOP);
-          if (srcHop < 0 || srcHop >= env.length) { continue; }
-          value = env[srcHop];
+          srcHop = Math.round((srcT - env.offset) / HOP);
+          if (srcHop < 0 || srcHop >= env.db.length) { continue; }
+          value = env.db[srcHop];
           if (value > timeline[h]) { timeline[h] = value; }
         }
       }

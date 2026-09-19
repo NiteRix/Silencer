@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <ExtensionManifest Version="7.0"
                    ExtensionBundleId="com.niterix.silencer"
-                   ExtensionBundleVersion="1.0.0"
+                   ExtensionBundleVersion="1.0.1"
                    ExtensionBundleName="Silencer"
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
   <ExtensionList>
-    <Extension Id="com.niterix.silencer.panel" Version="1.0.0"/>
+    <Extension Id="com.niterix.silencer.panel" Version="1.0.1"/>
   </ExtensionList>
 
   <ExecutionEnvironment>

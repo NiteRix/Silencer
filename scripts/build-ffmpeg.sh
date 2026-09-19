@@ -22,6 +22,13 @@ WORK="${WORK:-$(mktemp -d)}"
 
 [ -n "$OUTPUT" ] || { echo "usage: $0 <windows|linux> <output-path>" >&2; exit 1; }
 
+# Resolve the destination before anything cd's anywhere. The build runs inside
+# the ffmpeg checkout, so a relative output path would otherwise land there
+# instead of where the caller asked for it.
+mkdir -p "$(dirname "$OUTPUT")"
+OUTPUT="$(cd "$(dirname "$OUTPUT")" && pwd)/$(basename "$OUTPUT")"
+OUTDIR="$(dirname "$OUTPUT")"
+
 # Containers an NLE actually hands us.
 DEMUXERS=aac,ac3,aiff,amr,asf,au,avi,caf,dts,eac3,flac,flv,matroska,mov,mp3,mpegps,mpegts,mxf,ogg,w64,wav,latm,live_flv
 
@@ -108,11 +115,10 @@ grep -q 'License: LGPL' ffbuild/config.log 2>/dev/null || true
 echo "==> build"
 make -j"$(nproc)" > /dev/null
 
-mkdir -p "$(dirname "$OUTPUT")"
 cp "$BIN" "$OUTPUT"
 
 # Licence obligations travel with the binary.
-cp COPYING.LGPLv2.1 "$(dirname "$OUTPUT")/ffmpeg-COPYING.LGPLv2.1"
+cp COPYING.LGPLv2.1 "$OUTDIR/ffmpeg-COPYING.LGPLv2.1"
 {
   echo "This directory contains a purpose-built ffmpeg, used by Silencer to"
   echo "decode audio that the browser engine inside the panel cannot read."
@@ -129,6 +135,6 @@ cp COPYING.LGPLv2.1 "$(dirname "$OUTPUT")/ffmpeg-COPYING.LGPLv2.1"
   echo
   echo "Build configuration:"
   sed -n 's/^FFMPEG_CONFIGURATION=//p' ffbuild/config.mak
-} > "$(dirname "$OUTPUT")/ffmpeg-README.txt"
+} > "$OUTDIR/ffmpeg-README.txt"
 
 printf '==> %s  %.1f MB\n' "$OUTPUT" "$(echo "scale=2; $(stat -c%s "$OUTPUT")/1048576" | bc)"

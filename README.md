@@ -183,7 +183,7 @@ extension/            the CEP panel, exactly as it gets installed
   js/                 detection, ffmpeg plumbing, waveform, controller
   jsx/Silencer.jsx    everything that touches the timeline
 installer/windows/    Inno Setup script for the .exe
-scripts/              syntax checks, tests, and the screenshot harness
+scripts/              syntax checks, tests, the ffmpeg build and the screenshot harness
 Install-*.{bat,command}   the no-hassle installers
 ```
 
@@ -194,6 +194,15 @@ CI does this on every push, but locally:
 ```bash
 node scripts/check-syntax.mjs    # parse every shipped script, check the manifest
 node scripts/test.mjs            # detector and timeline-maths tests
+
+# the bundled ffmpeg (needs mingw-w64 for the windows target)
+scripts/build-ffmpeg.sh windows ffmpeg-out/ffmpeg.exe
+scripts/build-ffmpeg.sh linux   ffmpeg-out/ffmpeg
+
+# prove the stripped build decodes what a full one does (needs ffmpeg on PATH)
+python3 scripts/make-fixture-wav.py /tmp/fixture.wav
+python3 scripts/verify-ffmpeg.py ffmpeg-out/ffmpeg /tmp/fixture.wav
+
 iscc /DSourceRoot=. installer/windows/silencer-setup.iss   # Windows .exe
 ```
 

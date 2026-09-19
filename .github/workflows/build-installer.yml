@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 jobs:
   check:
@@ -109,8 +110,50 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
+      - name: Show what will be attached
+        run: find artifacts -type f -printf '%s\t%p\n' | sort -rn
+      - name: Derive version
+        # Assets are named from the manifest version (1.0.0), the tag carries
+        # a leading v (v1.0.0) - the body needs the bare number to name files.
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
         with:
+          name: Silencer ${{ github.ref_name }}
+          # Publishing a release with no installers attached would be worse
+          # than failing, because the download links would just be missing.
+          fail_on_unmatched_files: true
           files: |
             artifacts/**/*.zip
             artifacts/**/*.exe
+          body: |
+            Removes the silence from a Premiere Pro timeline, after duplicating
+            the sequence into a backup bin.
+
+            ## Download
+
+            | You are on | Get |
+            |---|---|
+            | **Windows** | `Silencer-${{ env.VERSION }}-Setup.exe` — run it, restart Premiere |
+            | **macOS** | `Silencer-${{ env.VERSION }}-portable.zip` — unpack, double-click `Install-Mac.command`, restart Premiere |
+
+            The portable zip also works on Windows if you would rather not run
+            an installer: unpack it and double-click `Install-Windows.bat`.
+
+            Both install into your own user folder, so there is no admin prompt.
+            Neither is signed with an Adobe certificate, so the installer also
+            switches on CEP's "allow unsigned extensions" setting — that is
+            what makes the panel load at all.
+
+            Then open it from **Window > Extensions > Silencer**.
+
+            ## Notes
+
+            - Premiere Pro 14.0 (2020) or newer for cutting. 13.x can analyse
+              and place markers but cannot move clips from a script.
+            - ffmpeg is optional. The installer offers to fetch it; it covers
+              ProRes, DNxHD and other codecs the built-in decoder cannot read.
+            - Nothing leaves your machine, and nothing is cut until you press
+              **Cut the silence**.
+
+            Full README: https://github.com/NiteRix/Silencer/blob/${{ github.ref_name }}/README.md
+            Trouble: https://github.com/NiteRix/Silencer/blob/${{ github.ref_name }}/docs/TROUBLESHOOTING.md

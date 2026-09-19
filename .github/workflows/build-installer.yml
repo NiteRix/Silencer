@@ -6,6 +6,11 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Tag to cut a release at, e.g. v1.0.0. Leave empty to only build."
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -105,20 +110,32 @@ jobs:
     name: Attach to release
     runs-on: ubuntu-latest
     needs: [zip, windows-setup]
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
       - name: Show what will be attached
         run: find artifacts -type f -printf '%s\t%p\n' | sort -rn
-      - name: Derive version
-        # Assets are named from the manifest version (1.0.0), the tag carries
-        # a leading v (v1.0.0) - the body needs the bare number to name files.
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - name: Resolve tag
+        # On a tag push the ref is the tag; on a manual run it comes from the
+        # input, and action-gh-release creates the tag at this commit. Assets
+        # are named from the manifest version (1.0.0) while the tag carries a
+        # leading v, so the body needs the bare number to name files.
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          [ -n "$TAG" ] || TAG="$GITHUB_REF_NAME"
+          case "$TAG" in
+            v[0-9]*) ;;
+            *) echo "Refusing to release at '$TAG' - expected something like v1.0.0"; exit 1 ;;
+          esac
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
       - uses: softprops/action-gh-release@v2
         with:
-          name: Silencer ${{ github.ref_name }}
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Silencer ${{ env.TAG }}
           # Publishing a release with no installers attached would be worse
           # than failing, because the download links would just be missing.
           fail_on_unmatched_files: true
@@ -155,5 +172,5 @@ jobs:
             - Nothing leaves your machine, and nothing is cut until you press
               **Cut the silence**.
 
-            Full README: https://github.com/NiteRix/Silencer/blob/${{ github.ref_name }}/README.md
-            Trouble: https://github.com/NiteRix/Silencer/blob/${{ github.ref_name }}/docs/TROUBLESHOOTING.md
+            Full README: https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/README.md
+            Trouble: https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/docs/TROUBLESHOOTING.md

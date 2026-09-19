@@ -31,7 +31,6 @@ OutputBaseFilename=Silencer-{#AppVersion}-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayName={#AppName} for Premiere Pro
 AppSupportURL=https://github.com/NiteRix/Silencer
 AppUpdatesURL=https://github.com/NiteRix/Silencer/releases
@@ -62,7 +61,8 @@ Root: HKCU; Subkey: "Software\Adobe\CSXS.11"; ValueType: string; ValueName: "Pla
 Root: HKCU; Subkey: "Software\Adobe\CSXS.12"; ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
 
 [Run]
-Filename: "{cmd}"; Parameters: "/c """"{app}\Install-Windows.bat"" /ffmpegonly /silent"""; \
+; Batch files have to go through cmd.exe; Inno escapes a quote by doubling it.
+Filename: "{cmd}"; Parameters: "/c ""{app}\Install-Windows.bat"" /ffmpegonly /silent"; \
   StatusMsg: "Downloading ffmpeg..."; Tasks: ffmpeg; Flags: runhidden waituntilterminated
 
 [UninstallDelete]

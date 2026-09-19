@@ -63,17 +63,38 @@ jobs:
         shell: pwsh
         run: |
           $xml = [xml](Get-Content extension/CSXS/manifest.xml)
-          $v = $xml.ExtensionManifest.ExtensionBundleVersion
-          "VERSION=$v" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          Add-Content -Path $env:GITHUB_ENV -Value "VERSION=$($xml.ExtensionManifest.ExtensionBundleVersion)"
       - name: Install Inno Setup
         run: choco install innosetup --no-progress -y
       - name: Compile installer
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-          & "$env:ProgramFiles(x86)\Inno Setup 6\ISCC.exe" `
-              "/DSourceRoot=$pwd" "/DAppVersion=$env:VERSION" `
-              installer\windows\silencer-setup.iss
+
+          # ${env:ProgramFiles(x86)} needs the braces around the whole name -
+          # "$env:ProgramFiles(x86)" expands the variable and leaves "(x86)"
+          # sitting there as literal text.
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe",
+            "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) { $iscc = (Get-Command ISCC.exe -ErrorAction SilentlyContinue).Source }
+          if (-not $iscc) {
+            Write-Host "ISCC.exe not found. Looked in:"
+            $candidates | ForEach-Object { Write-Host "  $_" }
+            exit 1
+          }
+          Write-Host "Using $iscc"
+
+          & $iscc "/DSourceRoot=$($PWD.Path)" "/DAppVersion=$env:VERSION" `
+                  "installer\windows\silencer-setup.iss"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $built = Get-ChildItem dist\*.exe -ErrorAction SilentlyContinue
+          if (-not $built) { Write-Error "ISCC reported success but produced no .exe"; exit 1 }
+          $built | ForEach-Object { Write-Host "Built $($_.Name) ($([math]::Round($_.Length / 1MB, 1)) MB)" }
       - uses: actions/upload-artifact@v4
         with:
           name: Silencer-windows-setup

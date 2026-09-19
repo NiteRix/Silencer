@@ -161,11 +161,12 @@ jobs:
         run: find artifacts -type f -printf '%s\t%p\n' | sort -rn
       - name: Checksums
         run: |
+          # Only the installers. ffmpeg-win64 is an input to those builds, not
+          # something anyone should download on its own.
           cd artifacts
-          find . -type f \( -name '*.exe' -o -name '*.zip' \) -printf '%p\n' \
-            | sort | xargs sha256sum | sed 's|\./[^/]*/||' > ../SHA256SUMS.txt
-          cat ../SHA256SUMS.txt
-          mv ../SHA256SUMS.txt .
+          sha256sum Silencer-portable-zip/*.zip Silencer-windows-setup/*.exe \
+            | sed 's|[^ ]*/||' > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - name: Resolve tag
         # On a tag push the ref is the tag; on a manual run it comes from the
         # input, and action-gh-release creates the tag at this commit. Assets
@@ -189,8 +190,8 @@ jobs:
           # than failing, because the download links would just be missing.
           fail_on_unmatched_files: true
           files: |
-            artifacts/**/*.zip
-            artifacts/**/*.exe
+            artifacts/Silencer-portable-zip/*.zip
+            artifacts/Silencer-windows-setup/*.exe
             artifacts/SHA256SUMS.txt
           body: |
             Removes the silence from a Premiere Pro timeline, after duplicating
@@ -217,8 +218,15 @@ jobs:
 
             - Premiere Pro 14.0 (2020) or newer for cutting. 13.x can analyse
               and place markers but cannot move clips from a script.
-            - ffmpeg is optional. The installer offers to fetch it; it covers
-              ProRes, DNxHD and other codecs the built-in decoder cannot read.
+            - **ffmpeg is built in on Windows.** Nothing is downloaded during
+              install. It is a purpose-built 7 MB audio-only binary rather than
+              upstream's 127 MB one, LGPL v2.1, with the licence and the exact
+              build recipe shipped beside it. On macOS, `brew install ffmpeg`
+              and Silencer will find it.
+            - Windows will warn that the installer is unsigned, and antivirus
+              may scan the bundled ffmpeg the first time it runs. Both are
+              expected — [the troubleshooting guide explains
+              why](https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/docs/TROUBLESHOOTING.md).
             - Nothing leaves your machine, and nothing is cut until you press
               **Cut the silence**.
 

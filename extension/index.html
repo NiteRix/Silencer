@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Silencer</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">Silencer</span>
+  </div>
+  <button id="refresh" class="icon-btn" title="Re-read the active sequence">&#8635;</button>
+</header>
+
+<div id="sequence" class="sequence">
+  <span class="seq-label">Sequence</span>
+  <span id="sequence-name" class="seq-name">Checking&hellip;</span>
+</div>
+
+<main>
+  <button id="analyze" class="btn btn-primary">Analyze silence</button>
+
+  <div id="progress" class="progress hidden">
+    <div class="progress-track"><div id="progress-bar" class="progress-bar"></div></div>
+    <div id="progress-text" class="progress-text"></div>
+  </div>
+
+  <p id="empty-hint" class="hint empty-hint">
+    Analyzing only listens &mdash; nothing in your project changes until you
+    press <b>Cut the silence</b>.
+  </p>
+
+  <section id="results" class="card hidden">
+    <canvas id="waveform" class="waveform"></canvas>
+    <div class="stats">
+      <div class="stat"><span id="stat-cuts" class="stat-value">0</span><span class="stat-label">cuts</span></div>
+      <div class="stat"><span id="stat-removed" class="stat-value">0s</span><span class="stat-label">removed</span></div>
+      <div class="stat"><span id="stat-new" class="stat-value">0s</span><span class="stat-label">new length</span></div>
+    </div>
+    <div id="threshold-readout" class="threshold-readout"></div>
+  </section>
+
+  <details class="card" id="settings-card">
+    <summary>Detection settings</summary>
+
+    <div class="field">
+      <label class="check">
+        <input type="checkbox" id="autoThreshold" checked>
+        <span>Pick the threshold automatically</span>
+      </label>
+    </div>
+
+    <div class="field" id="threshold-field">
+      <label for="thresholdDb">Silence below <b id="thresholdDb-out">-35</b> dB</label>
+      <input type="range" id="thresholdDb" min="-70" max="-10" step="1" value="-35">
+    </div>
+
+    <div class="field">
+      <label for="minSilenceMs">Only cut silence longer than <b id="minSilenceMs-out">500</b> ms</label>
+      <input type="range" id="minSilenceMs" min="100" max="3000" step="50" value="500">
+    </div>
+
+    <div class="field">
+      <label for="paddingMs">Keep <b id="paddingMs-out">100</b> ms of air around speech</label>
+      <input type="range" id="paddingMs" min="0" max="500" step="10" value="100">
+    </div>
+
+    <div class="field">
+      <label for="minNoiseMs">Ignore blips shorter than <b id="minNoiseMs-out">40</b> ms</label>
+      <input type="range" id="minNoiseMs" min="0" max="300" step="10" value="40">
+    </div>
+
+    <div class="field">
+      <label class="check"><input type="checkbox" id="trimLeading" checked><span>Trim silence at the start</span></label>
+      <label class="check"><input type="checkbox" id="trimTrailing" checked><span>Trim silence at the end</span></label>
+      <label class="check"><input type="checkbox" id="skipMutedTracks" checked><span>Ignore muted audio tracks</span></label>
+      <label class="check"><input type="checkbox" id="useFfmpeg" checked><span>Use ffmpeg when it is installed</span></label>
+    </div>
+
+    <div class="field">
+      <label for="trackSelect">Listen to</label>
+      <select id="trackSelect"><option value="all">All audio tracks</option></select>
+    </div>
+
+    <button id="reset-settings" class="btn btn-quiet btn-small">Reset to defaults</button>
+  </details>
+
+  <section class="card">
+    <label class="check">
+      <input type="checkbox" id="backup" checked>
+      <span>Back the timeline up before cutting</span>
+    </label>
+    <div class="field">
+      <label for="backupBin">Backup bin</label>
+      <input type="text" id="backupBin" value="Silencer Backups">
+    </div>
+    <p class="hint">A dated copy of the sequence is duplicated into that bin before the first cut is made.</p>
+  </section>
+
+  <div class="actions">
+    <button id="cut" class="btn btn-primary" disabled>Cut the silence</button>
+    <button id="markers" class="btn btn-quiet" disabled>Mark it instead</button>
+  </div>
+
+  <section class="card">
+    <details id="log-card">
+      <summary>Details</summary>
+      <pre id="log" class="log"></pre>
+    </details>
+  </section>
+</main>
+
+<div id="status" class="status" role="status"></div>
+
+<script src="js/lib/cep.js"></script>
+<script src="js/host.js"></script>
+<script src="js/env.js"></script>
+<script src="js/analyzer.js"></script>
+<script src="js/waveform.js"></script>
+<script src="js/main.js"></script>
+</body>
+</html>

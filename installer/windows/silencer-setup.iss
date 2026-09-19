@@ -1,0 +1,95 @@
+; Inno Setup script for the Silencer .exe installer.
+; Build with: iscc /DSourceRoot=..\.. silencer-setup.iss
+;
+; Installs into the per-user CEP extension folder, so no admin rights and no
+; UAC prompt. The panel shows up under Window > Extensions after a restart.
+
+#ifndef SourceRoot
+  #define SourceRoot "..\.."
+#endif
+#ifndef AppVersion
+  #define AppVersion "1.0.0"
+#endif
+
+#define AppName     "Silencer"
+#define AppPublisher "NiteRix"
+#define ExtensionId "com.niterix.silencer"
+
+[Setup]
+AppId={{9E3C1B62-7F4A-4C1D-9A1E-5B7D0C2E8A41}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppVerName={#AppName} {#AppVersion}
+AppPublisher={#AppPublisher}
+DefaultDirName={userappdata}\Adobe\CEP\extensions\{#ExtensionId}
+DisableDirPage=yes
+DisableProgramGroupPage=yes
+UsePreviousAppDir=no
+PrivilegesRequired=lowest
+OutputDir={#SourceRoot}\dist
+OutputBaseFilename=Silencer-{#AppVersion}-Setup
+Compression=lzma2/max
+SolidCompression=yes
+WizardStyle=modern
+ArchitecturesInstallIn64BitMode=x64compatible
+UninstallDisplayName={#AppName} for Premiere Pro
+AppSupportURL=https://github.com/NiteRix/Silencer
+AppUpdatesURL=https://github.com/NiteRix/Silencer/releases
+
+[Languages]
+Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Tasks]
+Name: "ffmpeg"; \
+  Description: "Add ffmpeg (about 30 MB, downloaded now) for ProRes, DNxHD and other pro codecs"; \
+  GroupDescription: "Optional:"; \
+  Flags: unchecked
+
+[Files]
+Source: "{#SourceRoot}\extension\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourceRoot}\Install-Windows.bat"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#SourceRoot}\README.md"; DestDir: "{app}"; Flags: ignoreversion
+
+[Registry]
+; CEP refuses to load unsigned extensions unless debug mode is on. One key per
+; CEP generation, covering Premiere Pro CC 2015 through current releases.
+Root: HKCU; Subkey: "Software\Adobe\CSXS.6";  ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Adobe\CSXS.7";  ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Adobe\CSXS.8";  ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Adobe\CSXS.9";  ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Adobe\CSXS.10"; ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Adobe\CSXS.11"; ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Adobe\CSXS.12"; ValueType: string; ValueName: "PlayerDebugMode"; ValueData: "1"; Flags: uninsdeletevalue
+
+[Run]
+Filename: "{cmd}"; Parameters: "/c """"{app}\Install-Windows.bat"" /ffmpegonly /silent"""; \
+  StatusMsg: "Downloading ffmpeg..."; Tasks: ffmpeg; Flags: runhidden waituntilterminated
+
+[UninstallDelete]
+Type: filesandordirs; Name: "{app}\bin"
+Type: dirifempty; Name: "{app}"
+
+[Code]
+function InitializeSetup(): Boolean;
+var
+  Running: Boolean;
+  ResultCode: Integer;
+begin
+  Result := True;
+  Running := Exec('cmd.exe',
+    '/c tasklist /fi "imagename eq Adobe Premiere Pro.exe" | find /i "Adobe Premiere Pro.exe"',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode) and (ResultCode = 0);
+  if Running then
+    MsgBox('Premiere Pro is currently open.' + #13#10 + #13#10 +
+           'Silencer will install fine, but the panel only appears after you ' +
+           'restart Premiere Pro.', mbInformation, MB_OK);
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+  if CurStep = ssPostInstall then
+    MsgBox('Silencer is installed.' + #13#10 + #13#10 +
+           'Restart Premiere Pro and open it from:' + #13#10 +
+           '    Window  >  Extensions  >  Silencer',
+           mbInformation, MB_OK);
+end;

@@ -1,5 +1,5 @@
 /*
- * Screenshots the real panel. The page, its CSS and all six of its scripts are
+ * Screenshots the real panel. The page, its CSS and all seven of its scripts are
  * the shipped files; only the CEP bridge is stubbed, so the waveform below is
  * genuine output from analyzer.js decoding a genuine wav.
  */
@@ -27,6 +27,8 @@ const SEQUENCE = {
   fps: 29.97,
   duration: 42.0,
   videoTrackCount: 2,
+  // The editor's own jump cut at 21 s, so the preview has an edit to plan around.
+  edgeFrames: [0, 629, 1259],
   warnings: [],
   audioTracks: [
     {
@@ -57,10 +59,11 @@ const stub = (sequence) => {
     evalScript: (script, cb) => {
       const fn = (script.match(/\$\.silencer\.(\w+)\(/) || [])[1];
       const answers = {
-        ping: { ok: true, app: '25.3.0', hasSequence: true, sequenceName: sequence.name, scriptVersion: '1.0.0', log: [] },
+        ping: { ok: true, app: '25.3.0', hasSequence: true, sequenceName: sequence.name, scriptVersion: '1.1.0', log: [] },
         getSequenceInfo: { ...sequence, log: [] },
         applyCuts: { ok: true, backup: sequence.name + ' [BACKUP 2026-09-19 143022]', cuts: 4,
-                     skipped: 0, segmentsRemoved: 8, clipsMoved: 8, removedDuration: 9.7, warnings: [], log: [] },
+                     skipped: 0, segmentsRemoved: 8, clipsMoved: 8, relinked: 5, removedDuration: 9.7, warnings: [],
+                     log: ['QE razor accepts the "ticks" time format.', 'Re-linked 5 piece(s) of picture to their own sound.'] },
         addMarkers: { ok: true, markers: 4, log: [] }
       };
       setTimeout(() => cb(JSON.stringify(answers[fn] || { ok: false, error: 'unknown call', log: [] })), 30);
@@ -122,9 +125,9 @@ await page.evaluate(() => {
   document.getElementById('autoThreshold').dispatchEvent(new Event('change'));
 });
 await page.waitForTimeout(900);
-await page.evaluate(() => window.scrollTo(0, 260));
 await page.waitForTimeout(200);
-await page.screenshot({ path: path.join(OUT, '3-settings.png') });
+// The panel scrolls inside itself, so shoot the settings card directly.
+await page.locator('#settings-card').screenshot({ path: path.join(OUT, '3-settings.png') });
 console.log('3-settings.png');
 
 // Details / log, after a cut.
@@ -141,6 +144,19 @@ await page.evaluate(() => { document.getElementById('log-card').open = true; win
 await page.waitForTimeout(300);
 await page.screenshot({ path: path.join(OUT, '4-after-cut.png') });
 console.log('4-after-cut.png ->', await page.textContent('#status'));
+
+// The presets: the same recording, cut two very different ways.
+for (const [name, file] of [['natural', '6-preset-natural.png'], ['tight', '7-preset-tight.png']]) {
+  await page.setViewportSize({ width: 380, height: 760 });
+  await page.reload();
+  await page.waitForFunction(() => !document.getElementById('analyze').disabled, null, { timeout: 15000 });
+  await page.click(`.preset[data-preset="${name}"]`);
+  await page.click('#analyze');
+  await page.waitForFunction(() => !document.getElementById('results').classList.contains('hidden'), null, { timeout: 60000 });
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: path.join(OUT, file) });
+  console.log(file.padEnd(24), '->', await page.textContent('#status'));
+}
 
 // A wider view for the README hero shot.
 await page.setViewportSize({ width: 460, height: 1130 });

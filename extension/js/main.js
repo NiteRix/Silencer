@@ -5,12 +5,40 @@
 (function (global) {
   'use strict';
 
+  /*
+   * Starting points, so nobody has to understand four sliders to get a good
+   * cut. Each one sets the timing; the threshold stays automatic because the
+   * right loudness depends on the recording, not on the kind of video.
+   */
+  var PRESETS = {
+    natural: {
+      hint: 'Podcasts and interviews. Only longer pauses go, and every cut keeps room to breathe.',
+      minSilenceMs: 800, paddingMs: 180, minNoiseMs: 60, minKeepFrames: 6
+    },
+    balanced: {
+      hint: 'Talking-head videos. Tightens the pacing without making it feel rushed. A good place to start.',
+      minSilenceMs: 500, paddingMs: 100, minNoiseMs: 40, minKeepFrames: 4
+    },
+    tight: {
+      hint: 'Shorts, Reels and TikTok. Fast, with almost every gap closed up.',
+      minSilenceMs: 250, paddingMs: 50, minNoiseMs: 30, minKeepFrames: 3
+    },
+    deadair: {
+      hint: 'Takes out long stretches of nothing and leaves ordinary pauses alone.',
+      minSilenceMs: 1500, paddingMs: 300, minNoiseMs: 80, minKeepFrames: 8
+    }
+  };
+  var PRESET_KEYS = ['minSilenceMs', 'paddingMs', 'minNoiseMs', 'minKeepFrames'];
+
   var DEFAULTS = {
+    preset: 'balanced',
     autoThreshold: true,
     thresholdDb: -35,
     minSilenceMs: 500,
     paddingMs: 100,
     minNoiseMs: 40,
+    minKeepFrames: 4,
+    smartEdges: true,
     trimLeading: true,
     trimTrailing: true,
     skipMutedTracks: true,
@@ -21,8 +49,9 @@
   };
 
   var STORAGE_KEY = 'silencer.settings.v1';
-  var RANGES = ['thresholdDb', 'minSilenceMs', 'paddingMs', 'minNoiseMs'];
-  var CHECKS = ['autoThreshold', 'trimLeading', 'trimTrailing', 'skipMutedTracks', 'useFfmpeg', 'backup'];
+  var RANGES = ['thresholdDb', 'minSilenceMs', 'paddingMs', 'minNoiseMs', 'minKeepFrames'];
+  var CHECKS = ['autoThreshold', 'smartEdges', 'trimLeading', 'trimTrailing', 'skipMutedTracks',
+                'useFfmpeg', 'backup'];
 
   var settings = {};
   var sequenceInfo = null;
@@ -67,6 +96,8 @@
     $('cut').disabled = on || !result || !result.regions.length;
     $('markers').disabled = on || !result || !result.regions.length;
     $('refresh').disabled = on;
+    var presetButtons = document.querySelectorAll('.preset'), i;
+    for (i = 0; i < presetButtons.length; i++) { presetButtons[i].disabled = on; }
   }
 
   function progress(fraction, text) {
@@ -86,6 +117,8 @@
     Object.keys(DEFAULTS).forEach(function (k) {
       settings[k] = (stored && stored[k] !== undefined) ? stored[k] : DEFAULTS[k];
     });
+    // Settings saved by 1.0 have no preset; say which one they amount to, if any.
+    settings.preset = matchingPreset();
   }
 
   function saveSettings() {
@@ -100,6 +133,44 @@
     CHECKS.forEach(function (k) { $(k).checked = !!settings[k]; });
     $('backupBin').value = settings.backupBin;
     $('threshold-field').classList.toggle('hidden', !!settings.autoThreshold);
+    showPreset();
+  }
+
+  /** Highlights the preset in use, or none when the sliders have been moved off it. */
+  function showPreset() {
+    var buttons = document.querySelectorAll('.preset'), i;
+    for (i = 0; i < buttons.length; i++) {
+      var on = buttons[i].getAttribute('data-preset') === settings.preset;
+      buttons[i].classList.toggle('is-on', on);
+      buttons[i].setAttribute('aria-checked', on ? 'true' : 'false');
+    }
+    $('preset-hint').textContent = PRESETS[settings.preset]
+      ? PRESETS[settings.preset].hint
+      : 'Custom \u2014 your own settings. Pick a preset above to go back to one.';
+  }
+
+  function applyPreset(name) {
+    var p = PRESETS[name];
+    if (!p) { return; }
+    PRESET_KEYS.forEach(function (k) { settings[k] = p[k]; });
+    settings.autoThreshold = true;
+    settings.smartEdges = true;
+    settings.preset = name;
+    saveSettings();
+    settingsToUi();
+  }
+
+  /** A preset stays selected only while every value it sets is untouched. */
+  function matchingPreset() {
+    var names = Object.keys(PRESETS), i;
+    for (i = 0; i < names.length; i++) {
+      var p = PRESETS[names[i]];
+      var same = settings.autoThreshold && settings.smartEdges && PRESET_KEYS.every(function (k) {
+        return Number(settings[k]) === p[k];
+      });
+      if (same) { return names[i]; }
+    }
+    return 'custom';
   }
 
   function uiToSettings() {
@@ -112,6 +183,8 @@
     var sel = $('trackSelect').value;
     settings.tracks = (sel === 'all') ? 'all' : [Number(sel)];
     $('threshold-field').classList.toggle('hidden', !!settings.autoThreshold);
+    settings.preset = matchingPreset();
+    showPreset();
     saveSettings();
   }
 
@@ -255,6 +328,8 @@
 
     global.Host.applyCuts({
       regions: result.regions,
+      frames: result.frames,
+      minKeepFrames: settings.minKeepFrames,
       backup: settings.backup,
       backupBinName: settings.backupBin,
       sequenceName: sequenceInfo.name
@@ -263,8 +338,11 @@
       global.Host.drainLog().forEach(logLine);
       if (res.backup) { logLine('Backup saved as "' + res.backup + '".'); }
       res.warnings.forEach(function (w) { logLine('Warning: ' + w); });
+      if (res.relinked) { logLine('Re-linked ' + res.relinked + ' clip(s) of picture to their own sound.'); }
       status('Removed ' + fmtTime(res.removedDuration) + ' across ' + res.cuts + ' cut(s).' +
-             (res.skipped ? ' ' + res.skipped + ' skipped — see Details.' : ''), 'good');
+             (res.skipped ? ' ' + res.skipped + ' skipped — see Details.' : ''),
+             res.warnings.length ? 'warn' : 'good');
+      if (res.warnings.length) { $('log-card').open = true; }
       invalidateResult();
       refreshSequence(true);
     }).catch(function (err) {
@@ -322,6 +400,15 @@
     });
     $('trackSelect').addEventListener('change', function () { uiToSettings(); scheduleReanalysis(); });
     $('backupBin').addEventListener('change', uiToSettings);
+
+    var presetButtons = document.querySelectorAll('.preset');
+    for (var pb = 0; pb < presetButtons.length; pb++) {
+      presetButtons[pb].addEventListener('click', function (e) {
+        if (busy) { return; }
+        applyPreset(e.currentTarget.getAttribute('data-preset'));
+        scheduleReanalysis();
+      });
+    }
 
     $('reset-settings').addEventListener('click', function () {
       settings = JSON.parse(JSON.stringify(DEFAULTS));

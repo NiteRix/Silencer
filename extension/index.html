@@ -22,6 +22,16 @@
 </div>
 
 <main>
+  <section class="presets-block">
+    <div class="presets" id="presets" role="radiogroup" aria-label="Cutting style">
+      <button class="preset" role="radio" data-preset="natural">Natural</button>
+      <button class="preset" role="radio" data-preset="balanced">Balanced</button>
+      <button class="preset" role="radio" data-preset="tight">Tight</button>
+      <button class="preset" role="radio" data-preset="deadair">Dead air</button>
+    </div>
+    <p id="preset-hint" class="hint preset-hint"></p>
+  </section>
+
   <button id="analyze" class="btn btn-primary">Analyze silence</button>
 
   <div id="progress" class="progress hidden">
@@ -78,6 +88,19 @@
     </div>
 
     <div class="field">
+      <label for="minKeepFrames">Never leave a piece shorter than <b id="minKeepFrames-out">4</b> frames</label>
+      <input type="range" id="minKeepFrames" min="1" max="12" step="1" value="4">
+      <p class="hint">Anything shorter would flash on screen. It goes with the cut, and a cut
+        that stops just short of one of your own edits is moved onto that edit.</p>
+    </div>
+
+    <div class="field">
+      <label class="check"><input type="checkbox" id="smartEdges" checked><span>Follow quiet word endings</span></label>
+      <p class="hint">Keeps the soft start and fading end of a word that a single loudness
+        line would clip off.</p>
+    </div>
+
+    <div class="field">
       <label class="check"><input type="checkbox" id="trimLeading" checked><span>Trim silence at the start</span></label>
       <label class="check"><input type="checkbox" id="trimTrailing" checked><span>Trim silence at the end</span></label>
       <label class="check"><input type="checkbox" id="skipMutedTracks" checked><span>Ignore muted audio tracks</span></label>
@@ -122,6 +145,7 @@
 <script src="js/lib/cep.js"></script>
 <script src="js/host.js"></script>
 <script src="js/env.js"></script>
+<script src="js/cutplan.js"></script>
 <script src="js/analyzer.js"></script>
 <script src="js/waveform.js"></script>
 <script src="js/main.js"></script>

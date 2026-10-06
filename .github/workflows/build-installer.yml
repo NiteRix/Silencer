@@ -154,6 +154,8 @@ jobs:
     needs: [zip, windows-setup]
     if: startsWith(github.ref, 'refs/tags/v') || inputs.release_tag != ''
     steps:
+      # For CHANGELOG.md, which supplies each release's own notes.
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -181,19 +183,25 @@ jobs:
           esac
           echo "TAG=$TAG" >> "$GITHUB_ENV"
           echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          target_commitish: ${{ github.sha }}
-          name: Silencer ${{ env.TAG }}
-          # Publishing a release with no installers attached would be worse
-          # than failing, because the download links would just be missing.
-          fail_on_unmatched_files: true
-          files: |
-            artifacts/Silencer-portable-zip/*.zip
-            artifacts/Silencer-windows-setup/*.exe
-            artifacts/SHA256SUMS.txt
-          body: |
+      - name: Write release notes
+        # What changed comes from this version's section of CHANGELOG.md, so
+        # every release page says what is new in it. A version with no section
+        # stops the release: shipping without notes is the mistake this catches.
+        run: |
+          awk -v v="$VERSION" '
+            $0 == "## " v { on = 1; next }
+            on && /^## /  { exit }
+            on            { print }
+          ' CHANGELOG.md > changes.md
+          if ! grep -q '[^[:space:]]' changes.md; then
+            echo "CHANGELOG.md has no '## $VERSION' section - write the notes first."
+            exit 1
+          fi
+          {
+            echo "## What's new in $VERSION"
+            cat changes.md
+            echo
+            sed -e 's/^  //' -e "s/__VERSION__/$VERSION/g" -e "s/__TAG__/$TAG/g" <<'NOTES'
             Removes the silence from a Premiere Pro timeline, after duplicating
             the sequence into a backup bin.
 
@@ -201,8 +209,8 @@ jobs:
 
             | You are on | Get |
             |---|---|
-            | **Windows** | `Silencer-${{ env.VERSION }}-Setup.exe` — run it, restart Premiere |
-            | **macOS** | `Silencer-${{ env.VERSION }}-portable.zip` — unpack, double-click `Install-Mac.command`, restart Premiere |
+            | **Windows** | `Silencer-__VERSION__-Setup.exe` — run it, restart Premiere |
+            | **macOS** | `Silencer-__VERSION__-portable.zip` — unpack, double-click `Install-Mac.command`, restart Premiere |
 
             The portable zip also works on Windows if you would rather not run
             an installer: unpack it and double-click `Install-Windows.bat`.
@@ -226,11 +234,27 @@ jobs:
             - Windows will warn that the installer is unsigned, and antivirus
               may scan the bundled ffmpeg the first time it runs. Both are
               expected — [the troubleshooting guide explains
-              why](https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/docs/TROUBLESHOOTING.md).
+              why](https://github.com/NiteRix/Silencer/blob/__TAG__/docs/TROUBLESHOOTING.md).
             - Nothing leaves your machine, and nothing is cut until you press
               **Cut the silence**.
 
             Verify a download against `SHA256SUMS.txt` if you want to.
 
-            Full README: https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/README.md
-            Trouble: https://github.com/NiteRix/Silencer/blob/${{ env.TAG }}/docs/TROUBLESHOOTING.md
+            Full README: https://github.com/NiteRix/Silencer/blob/__TAG__/README.md
+            Trouble: https://github.com/NiteRix/Silencer/blob/__TAG__/docs/TROUBLESHOOTING.md
+          NOTES
+          } > release-notes.md
+          cat release-notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          target_commitish: ${{ github.sha }}
+          name: Silencer ${{ env.TAG }}
+          # Publishing a release with no installers attached would be worse
+          # than failing, because the download links would just be missing.
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/Silencer-portable-zip/*.zip
+            artifacts/Silencer-windows-setup/*.exe
+            artifacts/SHA256SUMS.txt
+          body_path: release-notes.md

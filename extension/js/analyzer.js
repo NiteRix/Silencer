@@ -12,6 +12,8 @@
 
   var RATE = 8000;          // speech energy lives well below 4 kHz
   var HOP = 0.01;           // 10 ms envelope resolution
+  var RELEASE_DB = 10;      // how far below the threshold a word's tail may fall
+  var MAX_GROW = 0.25;      // and for how long, so a noisy room is not swallowed
   var FLOOR_DB = -120;
   var MAX_WEBAUDIO_BYTES = 700 * 1024 * 1024;
 
@@ -303,6 +305,32 @@
         }
       }
 
+      /*
+       * Follow each word down to where it actually ends.
+       *
+       * A single threshold draws a flat line through speech, and the quiet
+       * parts of a word - a soft first syllable, a trailing "s", a sentence
+       * that fades out - sit underneath it and get cut off. So a stretch of
+       * speech, once found, is grown outwards for as long as the level stays
+       * within RELEASE_DB of the threshold, up to MAX_GROW. Room tone sits far
+       * lower than that and is left alone; the tail of a word does not.
+       */
+      if (settings.smartEdges !== false) {
+        var releaseAt = threshold - RELEASE_DB;
+        var growHops = Math.round(MAX_GROW / HOP);
+        var grown = new Uint8Array(loud);
+        var speechRuns = runsOf(loud, 1), g, steps;
+        for (i = 0; i < speechRuns.length; i++) {
+          for (g = speechRuns[i][0] - 1, steps = 0; g >= 0 && steps < growHops && timeline[g] >= releaseAt; g--, steps++) {
+            grown[g] = 1;
+          }
+          for (g = speechRuns[i][1], steps = 0; g < hops && steps < growHops && timeline[g] >= releaseAt; g++, steps++) {
+            grown[g] = 1;
+          }
+        }
+        loud = grown;
+      }
+
       /* breathing room, so words do not lose their attack or tail */
       var padHops = Math.round(settings.paddingMs / 1000 / HOP);
       if (padHops > 0) {
@@ -333,24 +361,32 @@
         regions.push([run[0] * HOP, run[1] * HOP]);
       }
 
-      /* snap inwards to whole frames so Premiere never sees a sub-frame cut */
+      /*
+       * Whole frames from here on, snapped inwards so a cut never eats into
+       * speech, then planned around the editor's existing cuts exactly as the
+       * host script will plan them - same file, same answer.
+       */
       var fps = info.fps > 0 ? info.fps : 30;
-      var snapped = [];
+      var lastFrame = Math.floor(duration * fps + 1e-6);
+      var frameRegions = [];
       for (i = 0; i < regions.length; i++) {
-        var s = Math.ceil(regions[i][0] * fps - 1e-6) / fps;
-        var e = Math.floor(regions[i][1] * fps + 1e-6) / fps;
-        s = clamp(s, 0, duration);
-        e = clamp(e, 0, duration);
-        if (e - s >= (1 / fps) - 1e-6) { snapped.push([s, e]); }
+        var fs = clamp(Math.ceil(regions[i][0] * fps - 1e-6), 0, lastFrame);
+        var fe = clamp(Math.floor(regions[i][1] * fps + 1e-6), 0, lastFrame);
+        if (fe > fs) { frameRegions.push([fs, fe]); }
       }
+      var frames = global.CutPlan.plan(frameRegions, info.edgeFrames || [0, lastFrame],
+                                       settings.minKeepFrames || 1);
 
-      var removed = 0;
-      for (i = 0; i < snapped.length; i++) { removed += snapped[i][1] - snapped[i][0]; }
+      var snapped = [];
+      for (i = 0; i < frames.length; i++) { snapped.push([frames[i][0] / fps, frames[i][1] / fps]); }
+
+      var removed = global.CutPlan.total(frames) / fps;
 
       if (onProgress) { onProgress(1, 'Done'); }
 
       return {
         regions: snapped,
+        frames: frames,
         threshold: threshold,
         timeline: timeline,
         hop: HOP,

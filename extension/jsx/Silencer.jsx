@@ -7,6 +7,7 @@
  */
 
 // @include "json2.jsx"
+// @include "../js/cutplan.js"
 
 $.silencer = (function () {
 
@@ -91,6 +92,28 @@ $.silencer = (function () {
         } catch (e) {}
         return 30;
     }
+
+    /* Premiere stores the frame length exactly, in ticks; 29.97 is not 29.97. */
+    function ticksPerFrame(seq) {
+        try {
+            var tb = Number(seq.timebase);
+            if (tb > 0) { return tb; }
+        } catch (e) {}
+        return Math.round(TICKS_PER_SECOND / 30);
+    }
+
+    function timeToTicks(t) {
+        if (t === undefined || t === null) { return 0; }
+        try {
+            if (t.ticks !== undefined && t.ticks !== null) {
+                var n = Number(t.ticks);
+                if (!isNaN(n)) { return n; }
+            }
+        } catch (e) {}
+        return Math.round(timeToSec(t) * TICKS_PER_SECOND);
+    }
+
+    function frameOf(t, tpf) { return Math.round(timeToTicks(t) / tpf); }
 
     function safeCall(obj, name) {
         try {
@@ -178,7 +201,7 @@ $.silencer = (function () {
             build: (app.build ? String(app.build) : ''),
             hasSequence: !!seq,
             sequenceName: seq ? String(seq.name) : '',
-            scriptVersion: '1.0.1'
+            scriptVersion: '1.1.0'
         });
     }
 
@@ -211,6 +234,11 @@ $.silencer = (function () {
         try { info.videoTrackCount = seq.videoTracks.numTracks; } catch (e3) {}
 
         readTracks(seq, seq.audioTracks, 'audio', info.audioTracks);
+
+        // Where the editor has already cut, on every track, so the preview can
+        // plan around those edits exactly as the cut will.
+        try { info.edgeFrames = edgeFrames(collectTracks(seq, null), ticksPerFrame(seq)); }
+        catch (eE) { info.edgeFrames = [0]; }
 
         var total = 0, withMedia = 0, i, j;
         for (i = 0; i < info.audioTracks.length; i++) {
@@ -341,9 +369,10 @@ $.silencer = (function () {
      */
     var razorFormat = null;
 
-    function razorCandidates(sec, fps) {
+    function razorCandidates(frame, tpf, fps) {
+        var sec = frame * tpf / TICKS_PER_SECOND;
         return [
-            { id: 'ticks',   value: String(Math.round(sec * TICKS_PER_SECOND)) },
+            { id: 'ticks',   value: String(frame * tpf) },
             { id: 'tc',      value: secToTimecode(sec, fps, ':') },
             { id: 'tcDrop',  value: secToTimecode(sec, fps, ';') },
             { id: 'seconds', value: String(sec) }
@@ -354,34 +383,33 @@ $.silencer = (function () {
         try { return domTrack.clips.numItems; } catch (e) { return -1; }
     }
 
-    function straddles(domTrack, sec) {
+    function straddles(domTrack, frame, tpf) {
         var i, c, n = clipCount(domTrack);
         for (i = 0; i < n; i++) {
             try {
                 c = domTrack.clips[i];
-                if (timeToSec(c.start) < sec - EPS && timeToSec(c.end) > sec + EPS) { return true; }
+                if (frameOf(c.start, tpf) < frame && frameOf(c.end, tpf) > frame) { return true; }
             } catch (e) {}
         }
         return false;
     }
 
     /** Returns true when the boundary is clean afterwards (cut made, or none needed). */
-    function razorAt(domTrack, qeTrack, sec, fps) {
-        if (!straddles(domTrack, sec)) { return true; }   // already a through-edit or empty here
+    function razorAt(domTrack, qeTrack, frame, tpf, fps) {
+        if (!straddles(domTrack, frame, tpf)) { return true; }   // already an edit, or empty here
         if (!qeTrack) { return false; }
 
         var before = clipCount(domTrack);
-        var cands = razorCandidates(sec, fps), i, c;
+        var cands = razorCandidates(frame, tpf, fps), i, c;
 
         if (razorFormat) {
-            cands = [{ id: razorFormat, value: null }];
-            var all = razorCandidates(sec, fps);
-            for (i = 0; i < all.length; i++) { if (all[i].id === razorFormat) { cands[0].value = all[i].value; } }
+            for (i = 0; i < cands.length; i++) {
+                if (cands[i].id === razorFormat) { cands = [cands[i]]; break; }
+            }
         }
 
         for (i = 0; i < cands.length; i++) {
             c = cands[i];
-            if (c.value === null) { continue; }
             try { qeTrack.razor(c.value); } catch (e) { continue; }
             if (clipCount(domTrack) > before) {
                 if (!razorFormat) { note('QE razor accepts the "' + c.id + '" time format.'); }
@@ -390,10 +418,8 @@ $.silencer = (function () {
             }
         }
 
-        if (razorFormat) {
-            // The remembered format failed here; re-open the search next time.
-            razorFormat = null;
-        }
+        // The remembered format failed here; search again next time.
+        if (razorFormat) { razorFormat = null; }
         return false;
     }
 
@@ -422,8 +448,8 @@ $.silencer = (function () {
         return false;
     }
 
-    /** Lifts (never ripples) the item that starts at `sec` on this track. */
-    function removeAt(qeTrack, sec, fps) {
+    /** Lifts (never ripples) the item that starts at `frame` on this track. */
+    function removeAt(qeTrack, frame, tpf, fps) {
         if (!qeTrack) { return false; }
         var n = 0;
         try { n = qeTrack.numItems; } catch (e) { return false; }
@@ -432,9 +458,9 @@ $.silencer = (function () {
             try { item = qeTrack.getItemAt(i); } catch (e2) { continue; }
             if (!item || qeItemIsEmpty(item)) { continue; }
             s = qeTimeToSec(item.start, fps);
-            if (isNaN(s) || Math.abs(s - sec) > 0.002) { continue; }
+            if (isNaN(s) || Math.round(s * TICKS_PER_SECOND / tpf) !== frame) { continue; }
             try { item.remove(false, false); return true; }
-            catch (e3) { note('QE remove failed at ' + sec.toFixed(3) + 's: ' + e3); return false; }
+            catch (e3) { note('QE remove failed at frame ' + frame + ': ' + e3); return false; }
         }
         return false;
     }
@@ -516,30 +542,83 @@ $.silencer = (function () {
             t = tracks[i];
             locked = false;
             try { if (typeof t.dom.isLocked === 'function') { locked = (t.dom.isLocked() === true); } } catch (e) {}
-            if (locked) { names.push((t.kind === 'video' ? 'V' : 'A') + (t.index + 1)); }
+            if (locked) { names.push(trackName(t)); }
         }
         return names;
     }
 
-    function moveClip(clip, deltaSec) {
-        if (Math.abs(deltaSec) < EPS) { return true; }
-        var before = timeToSec(clip.start);
-        var target = before + deltaSec;
+    function trackName(t) { return (t.kind === 'video' ? 'V' : 'A') + (t.index + 1); }
+
+    function nodeIdOf(clip) {
+        try { var id = clip.nodeId; return (id === undefined || id === null) ? '' : String(id); }
+        catch (e) { return ''; }
+    }
+
+    /** Every clip on a track, as plain frame numbers. */
+    function clipsOf(t, tpf) {
+        var out = [], n = clipCount(t.dom), i, c;
+        for (i = 0; i < n; i++) {
+            try {
+                c = t.dom.clips[i];
+                if (!c) { continue; }
+                out.push({
+                    dom: c,
+                    id: nodeIdOf(c),
+                    start: frameOf(c.start, tpf),
+                    end: frameOf(c.end, tpf)
+                });
+            } catch (e) {}
+        }
+        return out;
+    }
+
+    /** Frames where any clip on any track begins or ends: the editor's own cuts. */
+    function edgeFrames(tracks, tpf) {
+        var edges = [0], i, j, list;
+        for (i = 0; i < tracks.length; i++) {
+            list = clipsOf(tracks[i], tpf);
+            for (j = 0; j < list.length; j++) { edges.push(list[j].start, list[j].end); }
+        }
+        return edges;
+    }
+
+    /**
+     * Finds a clip again after other edits, by its id where Premiere gives one
+     * and otherwise by where it was or where it should now be.
+     */
+    function findClip(t, want, tpf) {
+        var list = clipsOf(t, tpf), i, len = want.end - want.start;
+        if (want.id) {
+            for (i = 0; i < list.length; i++) { if (list[i].id === want.id) { return list[i]; } }
+        }
+        for (i = 0; i < list.length; i++) {
+            if (list[i].end - list[i].start !== len) { continue; }
+            if (list[i].start === want.start || list[i].start === want.target) { return list[i]; }
+        }
+        return null;
+    }
+
+    /**
+     * Shifts a clip by whole frames. Tries ticks, and seconds only if the clip
+     * did not move at all - never both, which is how a clip used to get moved
+     * twice when the first attempt landed a fraction of a frame off target.
+     */
+    function moveBy(clip, deltaFrames, tpf) {
+        if (!deltaFrames) { return; }
+        var from = frameOf(clip.start, tpf);
 
         var t = new Time();
-        try { t.ticks = String(Math.round(deltaSec * TICKS_PER_SECOND)); }
-        catch (e) { t.seconds = deltaSec; }
+        try { t.ticks = String(deltaFrames * tpf); }
+        catch (e) { t.seconds = deltaFrames * tpf / TICKS_PER_SECOND; }
         try { clip.move(t); } catch (e2) { note('move() threw: ' + e2); }
 
-        if (Math.abs(timeToSec(clip.start) - target) < 0.002) { return true; }
+        if (frameOf(clip.start, tpf) !== from) { return; }
 
-        // Some builds want seconds rather than ticks.
         var t2 = new Time();
         try {
-            t2.seconds = deltaSec;
+            t2.seconds = deltaFrames * tpf / TICKS_PER_SECOND;
             clip.move(t2);
         } catch (e3) {}
-        return Math.abs(timeToSec(clip.start) - target) < 0.002;
     }
 
     function supportsMove(tracks) {
@@ -553,14 +632,64 @@ $.silencer = (function () {
         return true;   // nothing to check against; let it run
     }
 
+    /**
+     * Links picture back to its own sound.
+     *
+     * Splitting tracks one at a time can leave the pieces of a camera clip
+     * unlinked, so clicking the picture no longer takes its audio with it. A
+     * video piece and an audio piece from the same file, covering the same
+     * frames and the same part of that file, are the same shot - so they are
+     * linked again. Anything offset or from another file is left alone.
+     */
+    function relinkPictureAndSound(seq, tracks, tpf) {
+        if (!seq || typeof seq.linkSelection !== 'function') { return 0; }
+
+        var video = [], audio = [], i, j, t, list, c, rec;
+        for (i = 0; i < tracks.length; i++) {
+            t = tracks[i];
+            list = clipsOf(t, tpf);
+            for (j = 0; j < list.length; j++) {
+                c = list[j];
+                rec = { dom: c.dom, start: c.start, end: c.end, media: mediaPathOf(c.dom), src: frameOf(c.dom.inPoint, tpf) };
+                if (!rec.media) { continue; }
+                (t.kind === 'video' ? video : audio).push(rec);
+            }
+        }
+
+        function select(rec, on) { try { rec.dom.setSelected(on ? 1 : 0, 0); } catch (e) {} }
+
+        for (i = 0; i < video.length; i++) { select(video[i], false); }
+        for (i = 0; i < audio.length; i++) { select(audio[i], false); }
+
+        var linked = 0, group, v;
+        for (i = 0; i < video.length; i++) {
+            v = video[i];
+            group = [];
+            for (j = 0; j < audio.length; j++) {
+                if (audio[j].media === v.media && audio[j].start === v.start &&
+                    audio[j].end === v.end && audio[j].src === v.src) { group.push(audio[j]); }
+            }
+            if (!group.length) { continue; }
+
+            select(v, true);
+            for (j = 0; j < group.length; j++) { select(group[j], true); }
+            try { if (seq.linkSelection()) { linked++; } } catch (eL) {}
+            select(v, false);
+            for (j = 0; j < group.length; j++) { select(group[j], false); }
+        }
+        return linked;
+    }
+
     /* ------------------------------------------------------ public: applyCuts */
 
     /**
      * opts = {
-     *   regions:       [[startSec, endSec], ...]   silence to remove
+     *   frames:        [[startFrame, endFrame], ...]  silence to remove, preferred
+     *   regions:       [[startSec, endSec], ...]      the same in seconds, as a fallback
+     *   minKeepFrames: 4                              never leave a shorter piece behind
      *   backup:        true,
      *   backupBinName: "Silencer Backups",
-     *   sequenceName:  "..."                       sanity check against the panel
+     *   sequenceName:  "..."                          sanity check against the panel
      * }
      */
     function applyCuts(optsJson) {
@@ -571,15 +700,30 @@ $.silencer = (function () {
         var seq = activeSequence();
         if (!seq) { return fail('No sequence is open.'); }
 
+        if (typeof CutPlan === 'undefined') {
+            return fail('Part of Silencer is missing (js/cutplan.js), so nothing was cut. Reinstall Silencer.');
+        }
+
         if (opts.sequenceName && String(seq.name) !== String(opts.sequenceName)) {
             return fail('The active sequence changed to "' + seq.name + '" since you analysed "' +
                         opts.sequenceName + '". Re-analyse before cutting.');
         }
 
-        var regions = normaliseRegions(opts.regions || []);
-        if (!regions.length) { return fail('There is nothing to cut.'); }
-
         var fps = sequenceFps(seq);
+        var tpf = ticksPerFrame(seq);
+        var minKeep = Math.max(1, Math.round(Number(opts.minKeepFrames) || 4));
+
+        var raw = [], i, k, t;
+        if (opts.frames && opts.frames.length) {
+            raw = opts.frames;
+        } else {
+            var secs = opts.regions || [];
+            for (i = 0; i < secs.length; i++) {
+                raw.push([Math.round(Number(secs[i][0]) * TICKS_PER_SECOND / tpf),
+                          Math.round(Number(secs[i][1]) * TICKS_PER_SECOND / tpf)]);
+            }
+        }
+
         var qeSeq = null;
         try { app.enableQE(); qeSeq = qe.project.getActiveSequence(); } catch (e2) {}
         if (!qeSeq) {
@@ -597,6 +741,10 @@ $.silencer = (function () {
                         'Premiere Pro 2020 (14.0) or newer is required for cutting; the Markers mode still works.');
         }
 
+        // Plan against the timeline as it really is, edits and all.
+        var cuts = CutPlan.plan(raw, edgeFrames(tracks, tpf), minKeep);
+        if (!cuts.length) { return fail('There is nothing to cut.'); }
+
         /* --- backup before anything destructive ------------------------------ */
         var backup = null;
         if (opts.backup !== false) {
@@ -608,18 +756,18 @@ $.silencer = (function () {
             tracks = collectTracks(seq, qeSeq);
         }
 
-        /* --- pass A: split every track at every region boundary --------------- */
-        var accepted = [], rejected = [], i, k, t, okStart, okEnd;
-        for (i = 0; i < regions.length; i++) {
+        /* --- pass A: split every track at every cut boundary ------------------ */
+        var accepted = [], rejected = [], okStart, okEnd;
+        for (i = 0; i < cuts.length; i++) {
             okStart = true;
             okEnd = true;
             for (k = 0; k < tracks.length; k++) {
                 t = tracks[k];
-                if (!razorAt(t.dom, t.qe, regions[i][0], fps)) { okStart = false; }
-                if (!razorAt(t.dom, t.qe, regions[i][1], fps)) { okEnd = false; }
+                if (!razorAt(t.dom, t.qe, cuts[i][0], tpf, fps)) { okStart = false; }
+                if (!razorAt(t.dom, t.qe, cuts[i][1], tpf, fps)) { okEnd = false; }
             }
-            if (okStart && okEnd) { accepted.push(regions[i]); }
-            else { rejected.push(regions[i]); }
+            if (okStart && okEnd) { accepted.push(cuts[i]); }
+            else { rejected.push(cuts[i]); }
         }
 
         if (!accepted.length) {
@@ -628,61 +776,85 @@ $.silencer = (function () {
                         { backup: backup, skipped: rejected.length });
         }
 
-        /* --- pass B: lift the silent segments out ----------------------------- */
-        var removed = 0, failedRemovals = 0, n, c, starts, s, e;
+        /* --- pass B: lift the silent pieces out ------------------------------- */
+        // Listed before anything is removed, because lifting one half of a linked
+        // pair can take the other half with it.
+        var doomed = [], list, j;
         for (k = 0; k < tracks.length; k++) {
-            t = tracks[k];
-            starts = [];
-            n = clipCount(t.dom);
-            for (i = 0; i < n; i++) {
-                try {
-                    c = t.dom.clips[i];
-                    s = timeToSec(c.start);
-                    e = timeToSec(c.end);
-                    if (insideRegion(accepted, s, e)) { starts.push(s); }
-                } catch (eB) {}
-            }
-            // Highest first, so earlier matches stay valid while the list shrinks.
-            starts.sort(function (a, b) { return b - a; });
-            for (i = 0; i < starts.length; i++) {
-                if (removeAt(t.qe, starts[i], fps)) { removed++; }
-                else { failedRemovals++; }
-            }
-        }
-
-        /* --- pass C: slide what is left back to close the gaps ---------------- */
-        var moved = 0, failedMoves = 0, plan, shift;
-        for (k = 0; k < tracks.length; k++) {
-            t = tracks[k];
-            plan = [];
-            n = clipCount(t.dom);
-            for (i = 0; i < n; i++) {
-                try {
-                    c = t.dom.clips[i];
-                    s = timeToSec(c.start);
-                    shift = silenceBefore(accepted, s);
-                    if (shift > EPS) { plan.push({ start: s, shift: shift }); }
-                } catch (eC) {}
-            }
-            // Left to right, so the space a clip moves into is always vacant already.
-            plan.sort(function (a, b) { return a.start - b.start; });
-            for (i = 0; i < plan.length; i++) {
-                var target = null, nn = clipCount(t.dom), jj;
-                for (jj = 0; jj < nn; jj++) {
-                    try {
-                        if (Math.abs(timeToSec(t.dom.clips[jj].start) - plan[i].start) < 0.002) {
-                            target = t.dom.clips[jj];
-                            break;
-                        }
-                    } catch (eD) {}
+            list = clipsOf(tracks[k], tpf);
+            for (j = 0; j < list.length; j++) {
+                if (CutPlan.inside(accepted, list[j].start, list[j].end)) {
+                    doomed.push({ track: tracks[k], id: list[j].id, start: list[j].start, end: list[j].end });
                 }
-                if (!target) { continue; }
-                if (moveClip(target, -plan[i].shift)) { moved++; } else { failedMoves++; }
+            }
+        }
+        doomed.sort(function (a, b) { return b.start - a.start; });
+
+        var removed = 0, failedRemovals = 0, d, there;
+        for (i = 0; i < doomed.length; i++) {
+            d = doomed[i];
+            there = findClip(d.track, { id: d.id, start: d.start, end: d.end, target: d.start }, tpf);
+            if (!there) { removed++; continue; }        // went with its linked partner
+            if (removeAt(d.track.qe, d.start, tpf, fps)) { removed++; continue; }
+            try { there.dom.remove(0, 0); } catch (eR) {}
+            if (findClip(d.track, { id: d.id, start: d.start, end: d.end, target: d.start }, tpf)) {
+                failedRemovals++;
+            } else {
+                removed++;
             }
         }
 
-        var removedDuration = 0;
-        for (i = 0; i < accepted.length; i++) { removedDuration += accepted[i][1] - accepted[i][0]; }
+        /* --- pass C: slide everything left to close the gaps ------------------ */
+        /*
+         * Every clip's destination is worked out once, from the timeline as it
+         * stands now, before anything moves. Then each clip is moved to that
+         * destination - by however far it is from it at that moment.
+         *
+         * That matters because Premiere may move a clip's linked partner along
+         * with it. If the partner's move were planned from where it happened to
+         * be by the time its turn came, it would be moved a second time, and
+         * every cut after that would push picture further from any sound that
+         * is not linked to it - a separately recorded mic, say. Planned this
+         * way, a partner that has already arrived is simply left where it is.
+         */
+        var plan = [], shift;
+        for (k = 0; k < tracks.length; k++) {
+            list = clipsOf(tracks[k], tpf);
+            for (j = 0; j < list.length; j++) {
+                shift = CutPlan.removedBefore(accepted, list[j].start);
+                if (shift > 0) {
+                    plan.push({ track: tracks[k], id: list[j].id, start: list[j].start, end: list[j].end,
+                                target: list[j].start - shift });
+                }
+            }
+        }
+        // Left to right across every track, so the space a clip moves into has
+        // always been vacated already.
+        plan.sort(function (a, b) { return a.start - b.start; });
+
+        var moved = 0, failedMoves = 0, p, clip;
+        for (i = 0; i < plan.length; i++) {
+            p = plan[i];
+            clip = findClip(p.track, p, tpf);
+            if (!clip) { failedMoves++; continue; }
+            if (clip.start !== p.target) { moveBy(clip.dom, p.target - clip.start, tpf); }
+            clip = findClip(p.track, p, tpf);
+            if (clip && clip.start === p.target) { moved++; }
+            else {
+                failedMoves++;
+                note(trackName(p.track) + ': a clip meant for frame ' + p.target + ' ended up at ' +
+                     (clip ? clip.start : 'an unknown place') + '.');
+            }
+        }
+
+        /* --- pass D: put picture and sound back together ---------------------- */
+        var relinked = 0;
+        if (opts.relink !== false) {
+            relinked = relinkPictureAndSound(seq, tracks, tpf);
+            if (relinked) { note('Re-linked ' + relinked + ' piece(s) of picture to their own sound.'); }
+        }
+
+        var removedFrames = CutPlan.total(accepted);
 
         var warnings = [];
         if (rejected.length) {
@@ -699,7 +871,8 @@ $.silencer = (function () {
             skipped: rejected.length,
             segmentsRemoved: removed,
             clipsMoved: moved,
-            removedDuration: removedDuration,
+            relinked: relinked,
+            removedDuration: removedFrames * tpf / TICKS_PER_SECOND,
             warnings: warnings
         });
     }
@@ -761,7 +934,8 @@ $.silencer = (function () {
             normaliseRegions: normaliseRegions,
             silenceBefore: silenceBefore,
             insideRegion: insideRegion,
-            secToTimecode: secToTimecode
+            secToTimecode: secToTimecode,
+            ticksPerFrame: ticksPerFrame
         }
     };
 

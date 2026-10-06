@@ -62,7 +62,8 @@ Run `Uninstall-Windows.bat` / `Uninstall-Mac.command`, or on Windows use
 | ![](docs/screenshots/1-ready.png) | ![](docs/screenshots/2-analyzed.png) | ![](docs/screenshots/3-settings.png) |
 
 1. Open the sequence you want to trim.
-2. Open the panel and press **Analyze silence**.
+2. Pick a preset — **Natural**, **Balanced**, **Tight** or **Dead air** — and
+   press **Analyze silence**.
 3. The waveform shows what it heard; the red bands are what it plans to remove.
    Drag the sliders and the preview updates immediately — re-analysis after the
    first pass is instant, because the decoded audio is cached.
@@ -72,6 +73,22 @@ Run `Uninstall-Windows.bat` / `Uninstall-Mac.command`, or on Windows use
 nothing else, which is a good way to sanity-check the settings on a timeline
 you care about.
 
+### Presets
+
+| Preset | For | Cuts silence longer than | Air kept around speech |
+|---|---|---|---|
+| **Natural** | Podcasts and interviews | 0.8 s | 180 ms |
+| **Balanced** | Talking-head videos — the default | 0.5 s | 100 ms |
+| **Tight** | Shorts, Reels, TikTok | 0.25 s | 50 ms |
+| **Dead air** | Long stretches of nothing only | 1.5 s | 300 ms |
+
+| Natural | Tight |
+|---|---|
+| ![](docs/screenshots/6-preset-natural.png) | ![](docs/screenshots/7-preset-tight.png) |
+
+Each preset only sets the timing; the threshold stays automatic. Move any
+slider afterwards and the panel shows **Custom**.
+
 ### Settings
 
 | Setting | What it does |
@@ -80,6 +97,8 @@ you care about.
 | **Only cut silence longer than** | Gaps shorter than this are left alone. Raise it for a calmer edit, lower it for a tighter one. |
 | **Keep N ms of air around speech** | Padding either side of every kept segment, so words don't lose their attack or tail. |
 | **Ignore blips shorter than** | Stops a single mouse click or lip smack from counting as speech. |
+| **Never leave a piece shorter than N frames** | Speech between two cuts that is only a frame or two long goes with the cut, and a cut that stops just short of one of your own edits snaps onto it — so nothing flashes on screen. |
+| **Follow quiet word endings** | Traces each word down to where it really ends, so a soft first syllable or a fading last word isn't clipped by the threshold. |
 | **Trim silence at the start / end** | Whether the head and tail of the timeline get trimmed too. |
 | **Ignore muted audio tracks** | Muted tracks don't count towards "is this moment silent". |
 | **Listen to** | Analyse every audio track, or just one — handy when your voice is on A1 and music is on A2. |
@@ -116,6 +135,19 @@ so Premiere never sees a sub-frame cut.
 That third step is why sync survives. The shift for each clip is computed from
 the global silence map rather than from a chain of ripple deletes, so every
 track moves by the same amount whether or not it had anything in the gap.
+
+Every clip's destination is worked out once, before anything moves, and each
+clip is then moved to it. Premiere doesn't document whether moving a clip from
+a script also moves the audio linked to it, and this way the answer doesn't
+matter: a clip already carried there by its partner is left alone. After
+cutting, picture and sound from the same file covering the same frames are
+linked back together.
+
+All of it is done in whole frames using the sequence's exact frame length, and
+the panel's preview uses the same planning code as the cut
+(`extension/js/cutplan.js`), so what the waveform shows is what gets cut.
+`scripts/fake-premiere.mjs` runs the real cutting code against a simulated
+timeline on every push.
 
 If Premiere refuses to split a clip at some point — a transition sitting on the
 cut point is the usual reason — that *whole region* is dropped rather than

@@ -296,5 +296,37 @@ label.check input { margin: 0; flex: 0 0 auto; accent-color: var(--accent); }
 }
 .status.error { color: var(--danger); }
 .status.good { color: #6fce8f; }
+.status.warn { color: #f2b84b; }
 
 .hidden { display: none !important; }
+
+/* -------------------------------------------------------------- presets */
+
+.presets-block { margin: 0 0 10px; }
+
+.presets {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.preset {
+  background: var(--host-panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 11px;
+  padding: 6px 2px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.preset:hover { color: var(--text); border-color: var(--text-dim); }
+.preset.is-on {
+  color: var(--text);
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+.preset:disabled { opacity: 0.5; cursor: default; }
+
+.preset-hint { min-height: 2.9em; }

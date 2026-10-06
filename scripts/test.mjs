@@ -6,6 +6,7 @@
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
+import { createPremiere } from './fake-premiere.mjs';
 
 // Values crossing a vm context keep that context's prototypes, so deepEqual
 // would reject them on identity alone. Round-trip them into this realm first.
@@ -28,6 +29,7 @@ const hostSandbox = {
   app: undefined, Time: function () {}, ProjectItemType: { BIN: 'bin' }
 };
 vm.createContext(hostSandbox);
+vm.runInContext(readFileSync('extension/js/cutplan.js', 'utf8'), hostSandbox, { filename: 'cutplan.js' });
 vm.runInContext(readFileSync('extension/jsx/Silencer.jsx', 'utf8'), hostSandbox, { filename: 'Silencer.jsx' });
 const host = hostSandbox.$.silencer._internals;
 
@@ -111,6 +113,7 @@ function loadAnalyzer(samples, spy) {
   };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
+  vm.runInContext(readFileSync('extension/js/cutplan.js', 'utf8'), sandbox, { filename: 'cutplan.js' });
   vm.runInContext(readFileSync('extension/js/analyzer.js', 'utf8'), sandbox, { filename: 'analyzer.js' });
   return sandbox.Analyzer;
 }
@@ -269,6 +272,173 @@ await testAsync('a silent timeline reports one region, not a crash', async () =>
   const res = await A.analyze(sequence(6), BASE, null);
   assert.equal(res.regions.length, 1);
   near(res.removed, 6, 0.1, 'everything removed');
+});
+
+/* ------------------------------------------------------------ cut planning */
+
+const planCtx = vm.createContext({ Math, Number, isNaN });
+vm.runInContext(readFileSync('extension/js/cutplan.js', 'utf8'), planCtx, { filename: 'cutplan.js' });
+const CutPlan = vm.runInContext('CutPlan', planCtx);
+const plan = (...a) => plain(CutPlan.plan(...a));
+
+test('a cut that stops a frame short of an existing edit lands on the edit', () => {
+  // Otherwise the last frame of the shot is left flashing between two jumps.
+  assert.deepEqual(plan([[240, 299]], [0, 300, 600], 4), [[240, 300]]);
+  assert.deepEqual(plan([[302, 400]], [0, 300, 600], 4), [[300, 400]]);
+});
+
+test('speech too short to keep between two cuts goes with them', () => {
+  assert.deepEqual(plan([[60, 90], [92, 120]], [0, 600], 4), [[60, 120]]);
+});
+
+test('pieces long enough to keep are left alone', () => {
+  assert.deepEqual(plan([[60, 90], [100, 120]], [0, 300, 600], 4), [[60, 90], [100, 120]]);
+  assert.deepEqual(plan([[240, 290]], [0, 300, 600], 4), [[240, 290]]);
+});
+
+test('frames removed before a point add up exactly', () => {
+  const cuts = [[30, 60], [150, 195]];
+  assert.equal(CutPlan.removedBefore(cuts, 0), 0);
+  assert.equal(CutPlan.removedBefore(cuts, 60), 30);
+  assert.equal(CutPlan.removedBefore(cuts, 170), 50);
+  assert.equal(CutPlan.removedBefore(cuts, 500), 75);
+});
+
+/* --------------------------------------------- cutting, against fake Premiere */
+
+/** Source frame shown at each timeline frame, for comparing tracks. */
+function sourceAt(p, track, f) {
+  const v = p.frameAt(track, f);
+  return v === null ? null : Number(v.split('#')[1]);
+}
+
+function assertContiguous(p, track, length) {
+  const pieces = p.state()[track];
+  assert.equal(pieces[0].startF, 0, `${track} should start at frame 0`);
+  for (let i = 1; i < pieces.length; i++) {
+    assert.equal(pieces[i].startF, pieces[i - 1].endF,
+      `${track} has a gap or overlap at frame ${pieces[i - 1].endF}`);
+  }
+  assert.equal(pieces[pieces.length - 1].endF, length, `${track} should end at frame ${length}`);
+}
+
+for (const carries of [false, true]) {
+  test(`picture and sound stay in sync (move ${carries ? 'drags' : 'leaves'} the linked partner)`, () => {
+    const p = createPremiere({ fps: 30, moveCarriesLinked: carries, moveCollision: 'overwrite' });
+    p.lay({ V1: [[0, 600, 'cam.mp4', 'L1']], A1: [[0, 600, 'cam.mp4', 'L1']] });
+    const res = p.cut([[2, 3], [5, 6.5], [10, 11]]);
+    assert.ok(res.ok, res.error);
+    assert.deepEqual(plain(res.warnings), []);
+    assertContiguous(p, 'V1', 495);
+    assertContiguous(p, 'A1', 495);
+    for (let f = 0; f < 495; f++) {
+      assert.equal(sourceAt(p, 'A1', f), sourceAt(p, 'V1', f), `out of sync at frame ${f}`);
+    }
+  });
+
+  test(`a separate mic stays in sync with the picture (move ${carries ? 'drags' : 'leaves'} the linked partner)`, () => {
+    // Camera with its scratch audio linked, plus a lav recorded on its own and
+    // synced by hand. This is the setup that used to drift.
+    const p = createPremiere({ fps: 30, moveCarriesLinked: carries, moveCollision: 'overwrite' });
+    p.lay({
+      V1: [[0, 600, 'cam.mp4', 'L1']],
+      A1: [[0, 600, 'cam.mp4', 'L1']],
+      A2: [[0, 600, 'lav.wav', null]]
+    });
+    const res = p.cut([[2, 3], [5, 6.5], [10, 11]]);
+    assert.ok(res.ok, res.error);
+    for (let f = 0; f < 495; f++) {
+      assert.equal(sourceAt(p, 'A2', f), sourceAt(p, 'V1', f), `mic drifted from picture at frame ${f}`);
+    }
+  });
+}
+
+test('no piece shorter than the minimum is left behind', () => {
+  // 29.97, an existing jump cut, and a silence that stops one frame short of it.
+  const p = createPremiere({ fps: 29.97 });
+  p.lay({
+    V1: [[0, 300, 'cam.mp4', 'L1'], [300, 600, 'cam.mp4', 'L2', 400]],
+    A1: [[0, 300, 'cam.mp4', 'L1'], [300, 600, 'cam.mp4', 'L2', 400]]
+  });
+  const res = p.cut([], { frames: [[240, 299]], minKeepFrames: 4 });
+  assert.ok(res.ok, res.error);
+  assert.deepEqual(plain(res.warnings), []);
+  for (const [name, pieces] of Object.entries(p.state())) {
+    for (const c of pieces) {
+      assert.ok(c.endF - c.startF >= 4, `${name} kept a ${c.endF - c.startF}-frame piece at ${c.startF}`);
+    }
+  }
+  assertContiguous(p, 'V1', 540);
+});
+
+test('a lift that takes the linked partner with it is not reported as a failure', () => {
+  const p = createPremiere({ fps: 25, liftTakesPartner: true });
+  p.lay({ V1: [[0, 500, 'cam.mp4', 'L1']], A1: [[0, 500, 'cam.mp4', 'L1']] });
+  const res = p.cut([[4, 6], [10, 12]]);
+  assert.ok(res.ok, res.error);
+  assert.deepEqual(plain(res.warnings), []);
+  assertContiguous(p, 'A1', 400);
+});
+
+test('pieces of picture are linked back to their own sound', () => {
+  const p = createPremiere({ fps: 30, razorBreaksLinks: true });
+  p.lay({
+    V1: [[0, 600, 'cam.mp4', 'L1']],
+    A1: [[0, 600, 'cam.mp4', 'L1']],
+    A2: [[0, 600, 'lav.wav', null]]
+  });
+  const res = p.cut([[2, 3], [10, 11]]);
+  assert.ok(res.ok, res.error);
+  assert.equal(res.relinked, 3, 'three pieces of camera clip remain');
+  const st = p.state();
+  st.V1.forEach((v, i) => {
+    assert.ok(v.link, `video piece ${i} is unlinked`);
+    assert.equal(st.A1[i].link, v.link, `video piece ${i} is not linked to its own audio`);
+  });
+  assert.ok(st.A2.every((c) => !c.link), 'the separate mic must not be linked to anything');
+});
+
+test('seconds still work when no frame list is sent', () => {
+  const p = createPremiere({ fps: 24 });
+  p.lay({ V1: [[0, 480, 'cam.mp4', 'L1']], A1: [[0, 480, 'cam.mp4', 'L1']] });
+  const res = p.cut([[5, 7.5]]);
+  assert.ok(res.ok, res.error);
+  assertContiguous(p, 'V1', 420);
+});
+
+/* ------------------------------------------------------ smarter word edges */
+
+await testAsync('a word fading out below the threshold is not clipped', async () => {
+  // Speech, then a 250 ms tail 5 dB under the threshold (a trailing "s"), then
+  // room tone. A flat threshold cuts at the end of the loud part; following
+  // the word keeps the tail.
+  const tailAmp = Math.pow(10, -40 / 20) * Math.SQRT2;          // -40 dB RMS
+  const samples = makeSignal(12, [[1, 4, 0.3], [4, 4.25, tailAmp], [8, 12, 0.3]]);
+  const flat = await loadAnalyzer(samples).analyze(sequence(12), { ...BASE, smartEdges: false }, null);
+  const smart = await loadAnalyzer(samples).analyze(sequence(12), { ...BASE, smartEdges: true }, null);
+  const flatGap = flat.regions.find((r) => r[0] > 3 && r[0] < 5);
+  const smartGap = smart.regions.find((r) => r[0] > 3 && r[0] < 5);
+  near(flatGap[0], 4.1, 0.06, 'flat threshold cuts at the end of the loud part');
+  near(smartGap[0], 4.35, 0.06, 'smart edges keep the tail, then pad it');
+});
+
+await testAsync('room tone is not mistaken for a word ending', async () => {
+  // A noisy room 15 dB under the threshold must not be grown into.
+  const roomAmp = Math.pow(10, -50 / 20) * Math.SQRT2;
+  const samples = makeSignal(12, [[0, 12, roomAmp], [2, 4, 0.3], [8, 10, 0.3]]);
+  const res = await loadAnalyzer(samples).analyze(sequence(12), BASE, null);
+  const gap = res.regions.find((r) => r[0] > 3 && r[0] < 5);
+  near(gap[0], 4.1, 0.06, 'cut starts right after the padding');
+});
+
+await testAsync('the preview plans around existing edits exactly as the cut will', async () => {
+  // Silence starts at about 5.1 s; an edit sits two frames earlier.
+  const samples = makeSignal(12, [[1, 5, 0.3], [8, 12, 0.3]]);
+  const info = { ...sequence(12), edgeFrames: [0, 151, 360] };
+  const res = await loadAnalyzer(samples).analyze(info, { ...BASE, minKeepFrames: 4 }, null);
+  const cut = res.frames.find((r) => r[0] > 140 && r[0] < 160);
+  assert.equal(cut[0], 151, `expected the cut to snap back onto the edit at 151, got ${cut[0]}`);
+  assert.deepEqual(plain(res.regions).map(r => r.map(x => Math.round(x * 30))), plain(res.frames));
 });
 
 console.log(`\n${passed} passed, ${failed} failed.`);

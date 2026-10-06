@@ -1,5 +1,62 @@
 # Changelog
 
+## 1.1.0
+
+Fixes three problems an editor reported, and adds presets.
+
+**Presets.** Four buttons above **Analyze**: *Natural* for podcasts and
+interviews, *Balanced* for talking-head videos, *Tight* for Shorts, Reels and
+TikTok, and *Dead air* to take out long stretches of nothing and leave normal
+pauses alone. Each sets the timing in one click. Move a slider afterwards and
+the panel shows *Custom*. Your old settings carry over and are matched to a
+preset if they line up with one.
+
+**Picture no longer drifts away from separately recorded sound.** Premiere
+does not document whether moving a clip from a script also moves the audio
+linked to it. 1.0 assumed it did not. If it does, the camera's own audio got
+moved twice, and from the second cut on, the picture slid further and further
+out of sync with any audio that is not linked to it, such as a lav or a
+separate mic synced by hand. Every clip's destination is now worked out once,
+before anything moves, so a clip that was carried along with its partner is
+simply left where it landed. Sync holds either way.
+
+**Picture and sound stay linked.** Splitting tracks one at a time could leave
+the pieces of a camera clip unlinked, so clicking the picture no longer
+selected its audio. After cutting, picture and sound that come from the same
+file and cover the same frames are linked again. Nothing else gets linked.
+
+**No more one-frame leftovers.** Two causes, both fixed:
+
+- A silence that ended a frame or two short of one of your own edits left
+  that frame of the shot behind, flashing between two jumps. Cuts now snap
+  onto a nearby existing edit.
+- Speech between two silences that was only a frame or two long was kept.
+  It now goes with the cut.
+
+*Never leave a piece shorter than N frames* in Detection settings controls
+both. The default is 4.
+
+**Cuts follow each word.** A single loudness line clipped the quiet parts of
+words: a soft first syllable, a trailing "s", a sentence that fades out.
+Speech is now traced down to where it actually ends, up to 10 dB below the
+threshold and for up to a quarter of a second. Room noise sits well below
+that and is left alone. Turn it off with *Follow quiet word endings*.
+
+Under the hood:
+
+- All cutting is done in whole frames using Premiere's exact frame length, so
+  29.97 and 23.976 sequences no longer pick up rounding drift. The panel's
+  preview and the cut use the same planning code, so the waveform shows
+  exactly what will be cut.
+- A clip that landed a fraction of a frame off target could be moved a second
+  time. Each clip now moves once.
+- A silent piece that was lifted out along with its linked partner is no
+  longer reported as "could not be deleted".
+- New tests run the real cutting code against a simulated Premiere timeline:
+  linked and unlinked clips, a separate mic, 29.97, and both possible
+  answers to the move question. The old code fails four of them; this release
+  passes all of them.
+
 ## 1.0.1
 
 Fixes the install hang and the antivirus warnings.
